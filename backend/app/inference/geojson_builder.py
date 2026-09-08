@@ -138,9 +138,10 @@ def build_geojson_feature(detection: Dict) -> Dict:
             "threat_level": detection["classification"]["threat_level"],
             "confidence": detection["confidence"],
             
-            # ── Physical Measurements ──
+            # ── Physical Measurements & MVB 3D Bounding ──
             "dimensions": detection["dimensions"],
             "h_target_m": detection["h_target_m"],
+            "mvb": detection.get("mvb", {}),
             
             # ── Acoustic Parameters ──
             "slant_range_m": detection["slant_range_m"],
@@ -154,9 +155,11 @@ def build_geojson_feature(detection: Dict) -> Dict:
                 "parameters": detection["parameters"]
             },
             
-            # ── Bounding Boxes (pixel space, for overlay rendering) ──
+            # ── Bounding Boxes & Polygons (pixel space, for overlay rendering) ──
             "highlight_bbox": detection["highlight_bbox"],
             "shadow_bbox": detection["shadow_bbox"],
+            "highlight_polygon": detection.get("highlight_polygon"),
+            "shadow_polygon": detection.get("shadow_polygon"),
             
             # ── Display Properties ──
             "marker_color": _get_threat_color(detection["classification"]["threat_level"]),

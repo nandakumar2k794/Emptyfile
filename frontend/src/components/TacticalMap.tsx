@@ -42,7 +42,7 @@ export default function TacticalMap({
 
   // ── Radar Canvas Interactive Pan & Deep-Zoom State ──
   const radarCanvasRef = useRef<HTMLCanvasElement>(null);
-  const radarAnimRef = useRef<number>();
+  const radarAnimRef = useRef<number | undefined>(undefined);
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({
     x: 0,
@@ -181,16 +181,16 @@ export default function TacticalMap({
       const maxRadius = Math.min(w, h) * 0.48 * zoomLevel;
 
       // Dark subsea oceanic abyss background
-      ctx.fillStyle = "#060a13";
+      ctx.fillStyle = "#0F1C2E";
       ctx.fillRect(0, 0, w, h);
 
       // ── Bathymetric Depth Contours ──
       const depths = [
-        { r: maxRadius * 0.2, label: "−10m Coastal Shelf", color: "rgba(0, 229, 255, 0.15)" },
-        { r: maxRadius * 0.4, label: "−20m Subsea Slope", color: "rgba(0, 229, 255, 0.12)" },
-        { r: maxRadius * 0.65, label: "−35m Debris Channel", color: "rgba(0, 229, 255, 0.10)" },
-        { r: maxRadius * 0.9, label: "−50m Trench Basin", color: "rgba(0, 229, 255, 0.08)" },
-        { r: maxRadius * 1.25, label: "−75m Outer Trench", color: "rgba(0, 229, 255, 0.05)" },
+        { r: maxRadius * 0.2, label: "−10m Coastal Shelf", color: "#334155" },
+        { r: maxRadius * 0.4, label: "−20m Subsea Slope", color: "#334155" },
+        { r: maxRadius * 0.65, label: "−35m Debris Channel", color: "#334155" },
+        { r: maxRadius * 0.9, label: "−50m Trench Basin", color: "#334155" },
+        { r: maxRadius * 1.25, label: "−75m Outer Trench", color: "#334155" },
       ];
 
       depths.forEach((depth) => {
@@ -208,7 +208,7 @@ export default function TacticalMap({
       });
 
       // ── Polar Grid Lines & Range Rings ──
-      ctx.strokeStyle = "rgba(0, 229, 255, 0.15)";
+      ctx.strokeStyle = "#334155";
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(cx, cy - maxRadius * 1.5);
@@ -216,54 +216,6 @@ export default function TacticalMap({
       ctx.moveTo(cx - maxRadius * 1.5, cy);
       ctx.lineTo(cx + maxRadius * 1.5, cy);
       ctx.stroke();
-
-      // ── Real-Time Sweeping Radar Sonar Beam ──
-      sweepAngle = (sweepAngle + 0.02) % (Math.PI * 2);
-      const gradient = ctx.createConicGradient(sweepAngle, cx, cy);
-      gradient.addColorStop(0, "rgba(0, 229, 255, 0.28)");
-      gradient.addColorStop(0.06, "rgba(0, 229, 255, 0.10)");
-      gradient.addColorStop(0.18, "rgba(0, 229, 255, 0)");
-      gradient.addColorStop(1, "rgba(0, 229, 255, 0)");
-
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.arc(cx, cy, maxRadius * 1.3, 0, Math.PI * 2);
-      ctx.fill();
-
-      // ── AUV Survey Vessel & Swath Cone (Center) ──
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.fillStyle = "#00e5ff";
-      ctx.shadowColor = "#00e5ff";
-      ctx.shadowBlur = 12;
-      // Vessel icon
-      ctx.beginPath();
-      ctx.moveTo(0, -12);
-      ctx.lineTo(7, 9);
-      ctx.lineTo(0, 6);
-      ctx.lineTo(-7, 9);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-
-      // Swath Port & Starboard acoustic wings
-      ctx.save();
-      ctx.fillStyle = "rgba(0, 229, 255, 0.06)";
-      ctx.strokeStyle = "rgba(0, 229, 255, 0.22)";
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, maxRadius * 0.9, Math.PI * 0.15, Math.PI * 0.85);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, maxRadius * 0.9, Math.PI * 1.15, Math.PI * 1.85);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
 
       // ── Draw GeoJSON Debris Detections ──
       if (geojson && geojson.features) {
@@ -277,50 +229,24 @@ export default function TacticalMap({
           const isSelected = selectedDetection?.id === feat.id;
           const color = feat.properties.marker_color || "#00e5ff";
 
-          // Pulsing sonar blip ripple
-          ctx.save();
-          const pulse = (Date.now() / 500 + idx * 0.3) % 1;
-          ctx.beginPath();
-          ctx.arc(px, py, (10 + pulse * 18) * Math.min(1.5, Math.max(0.8, zoomLevel)), 0, Math.PI * 2);
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 1.5;
-          ctx.globalAlpha = 1 - pulse;
-          ctx.stroke();
-          ctx.restore();
-
-          // Target Pin Core
+          // Simple Flat Dot Marker
           ctx.save();
           ctx.beginPath();
-          const dotRadius = (isSelected ? 9 : 6) * Math.min(1.4, Math.max(0.8, zoomLevel));
+          const dotRadius = isSelected ? 6 : 4;
           ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
-          ctx.fillStyle = color;
-          ctx.shadowColor = color;
-          ctx.shadowBlur = isSelected ? 20 : 10;
+          ctx.fillStyle = "#D97706";
           ctx.fill();
-          ctx.strokeStyle = "#ffffff";
-          ctx.lineWidth = isSelected ? 2.5 : 1.5;
-          ctx.stroke();
           ctx.restore();
-
-          // Target Info Inset Card on Canvas
+          
+          // Clean Minimal Target Badge
           ctx.save();
-          ctx.font = "bold 11px 'JetBrains Mono', monospace";
-          ctx.fillStyle = "#ffffff";
-          ctx.fillText(
-            `#${idx + 1} ${feat.properties.class_label.toUpperCase()}`,
-            px + 12,
-            py - 6
-          );
-
-          ctx.font = "9px 'JetBrains Mono', monospace";
-          ctx.fillStyle = color;
-          ctx.fillText(
-            `H=${feat.properties.h_target_m.toFixed(2)}m • ${(
-              feat.properties.confidence * 100
-            ).toFixed(0)}% (${feat.properties.threat_level})`,
-            px + 12,
-            py + 8
-          );
+          ctx.font = "11px sans-serif";
+          const label = `${feat.properties.class_label.replace(/_/g, " ").replace(/^\w/, c => c.toUpperCase())} · ${(feat.properties.confidence * 100).toFixed(0)}%`;
+          const metrics = ctx.measureText(label);
+          ctx.fillStyle = "rgba(15, 28, 46, 0.9)";
+          ctx.fillRect(px + 10, py - 14, metrics.width + 8, 16);
+          ctx.fillStyle = "#CBD5E1";
+          ctx.fillText(label, px + 14, py - 2);
           ctx.restore();
         });
       }
@@ -416,50 +342,40 @@ export default function TacticalMap({
   };
 
   return (
-    <div className="h-full flex flex-col relative overflow-hidden bg-[#060a13]">
+    <div className="h-full flex flex-col relative overflow-hidden bg-[var(--bg-primary)]">
       {/* Panel Header */}
-      <div
-        className="flex items-center justify-between px-4 py-2 border-b z-10 flex-wrap gap-2"
-        style={{
-          borderColor: "var(--border-subtle)",
-          background: "rgba(6, 10, 19, 0.95)",
-          backdropFilter: "blur(8px)",
-        }}
-      >
+      <div className="flex items-center justify-between px-3.5 py-2 bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] z-10 flex-wrap gap-2 shadow-none">
         <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
-          <span
-            className="text-xs font-semibold uppercase tracking-wider text-slate-200"
-            style={{ fontFamily: "'JetBrains Mono', monospace" }}
-          >
+          <div className="w-2.5 h-2.5 rounded-none bg-[#A3E635]" />
+          <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-primary)] font-mono">
             {viewMode === "radar"
               ? "Deep-Zoom Subsea Bathymetric GIS"
               : "3D Globe Tactical View (WGS84)"}
           </span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-500/30 font-mono">
+          <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border-[var(--border-subtle)] text-[var(--text-secondary)] border border-[var(--border-subtle)] font-mono font-bold">
             Zoom: {zoomLevel.toFixed(1)}x
           </span>
         </div>
 
         {/* View Switcher Controls */}
         <div className="flex items-center gap-2">
-          <div className="flex p-0.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono">
+          <div className="flex p-0.5 rounded-none bg-[var(--bg-tertiary)] border-[var(--border-subtle)] border border-[var(--border-subtle)] text-[11px] font-mono">
             <button
               onClick={() => setViewMode("radar")}
-              className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+              className={`px-2.5 py-1 rounded-none transition-all cursor-pointer ${
                 viewMode === "radar"
-                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold"
-                  : "text-slate-400 hover:text-slate-200"
+                  ? "bg-[var(--accent-primary)] text-white font-medium border border-[var(--accent-primary)] shadow-none"
+                  : "text-[var(--text-secondary)] hover:text-white"
               }`}
             >
-              📡 Deep-Zoom Radar GIS
+              📡 Radar GIS
             </button>
             <button
               onClick={() => setViewMode("mapbox")}
-              className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+              className={`px-2.5 py-1 rounded-none transition-all cursor-pointer ${
                 viewMode === "mapbox"
-                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold"
-                  : "text-slate-400 hover:text-slate-200"
+                  ? "bg-[var(--accent-primary)] text-white font-medium border border-[var(--accent-primary)] shadow-none"
+                  : "text-[var(--text-secondary)] hover:text-white"
               }`}
             >
               🛰️ 3D Globe
@@ -467,7 +383,7 @@ export default function TacticalMap({
           </div>
 
           {geojson && (
-            <span className="text-[11px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 font-mono">
+            <span className="text-[11px] px-2.5 py-0.5 rounded-none bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-subtle)] font-mono font-bold">
               {geojson.features.length} Targets
             </span>
           )}
@@ -475,7 +391,7 @@ export default function TacticalMap({
       </div>
 
       {/* Main Map / Radar Display */}
-      <div className="flex-1 relative overflow-hidden">
+      <div className="flex-1 relative overflow-hidden bg-slate-950">
         {viewMode === "radar" ? (
           <div className="w-full h-full relative cursor-grab active:cursor-grabbing">
             <canvas
@@ -488,16 +404,16 @@ export default function TacticalMap({
               className="w-full h-full block"
             />
 
-            {/* Radar Real-time Coordinate & Bathymetry HUD */}
-            <div className="absolute top-3 left-3 p-3 rounded-xl bg-black/70 backdrop-blur-md border border-cyan-500/20 text-[11px] font-mono text-slate-300 space-y-1 pointer-events-none shadow-xl">
-              <div className="text-cyan-400 font-bold flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+            {/* Radar Real-time Coordinate & Bathymetry HUD (Light Theme Card) */}
+            <div className="absolute top-3 left-3 p-3 rounded-none bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[11px] font-mono text-[var(--text-primary)] space-y-1 pointer-events-none shadow-none">
+              <div className="text-[var(--text-primary)] font-medium flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-none hidden" />
                 BATHYMETRY HUD: VIZAG SURVEY
               </div>
-              <div>LAT: {cursorGeo.lat.toFixed(5)}° N</div>
-              <div>LON: {cursorGeo.lon.toFixed(5)}° E</div>
-              <div>DEPTH: −{cursorGeo.depth.toFixed(1)}m | RANGE: {cursorGeo.range.toFixed(1)}m</div>
-              <div className="text-[10px] text-cyan-300/80 pt-1 border-t border-slate-800">
+              <div className="text-[var(--text-secondary)]">LAT: {cursorGeo.lat.toFixed(5)}° N</div>
+              <div className="text-[var(--text-secondary)]">LON: {cursorGeo.lon.toFixed(5)}° E</div>
+              <div className="text-[var(--text-secondary)]">DEPTH: −{cursorGeo.depth.toFixed(1)}m | RANGE: {cursorGeo.range.toFixed(1)}m</div>
+              <div className="text-[10px] text-[var(--text-muted)] pt-1 border-t border-[var(--border-subtle)]">
                 💡 Scroll wheel to zoom in/out • Click &amp; drag to pan
               </div>
             </div>
@@ -506,21 +422,21 @@ export default function TacticalMap({
             <div className="absolute bottom-4 right-4 flex flex-col gap-1.5 z-20 font-mono">
               <button
                 onClick={() => setZoomLevel((z) => Math.min(8.0, z * 1.3))}
-                className="w-8 h-8 rounded-lg bg-slate-900/90 text-cyan-300 border border-cyan-500/30 flex items-center justify-center font-bold hover:bg-cyan-500/20 cursor-pointer shadow-lg"
+                className="w-8 h-8 rounded-none bg-[var(--bg-secondary)] text-[var(--text-primary)] border border-[var(--border-subtle)] flex items-center justify-center font-bold hover:bg-[var(--bg-tertiary)] cursor-pointer shadow-none text-sm"
                 title="Zoom In"
               >
                 +
               </button>
               <button
                 onClick={() => setZoomLevel((z) => Math.max(0.4, z / 1.3))}
-                className="w-8 h-8 rounded-lg bg-slate-900/90 text-cyan-300 border border-cyan-500/30 flex items-center justify-center font-bold hover:bg-cyan-500/20 cursor-pointer shadow-lg"
+                className="w-8 h-8 rounded-none bg-[var(--bg-secondary)] text-[var(--text-primary)] border border-[var(--border-subtle)] flex items-center justify-center font-bold hover:bg-[var(--bg-tertiary)] cursor-pointer shadow-none text-sm"
                 title="Zoom Out"
               >
                 −
               </button>
               <button
                 onClick={resetView}
-                className="px-2 h-8 rounded-lg bg-slate-900/90 text-slate-300 border border-slate-700 text-[10px] flex items-center justify-center font-semibold hover:bg-slate-800 cursor-pointer shadow-lg"
+                className="px-2 h-8 rounded-none bg-[var(--bg-secondary)] text-[var(--text-primary)] border border-[var(--border-subtle)] text-[10px] flex items-center justify-center font-semibold hover:bg-[var(--bg-tertiary)] cursor-pointer shadow-none"
                 title="Reset View to Origin"
               >
                 ⟲ 1x
@@ -531,21 +447,20 @@ export default function TacticalMap({
           <div ref={mapContainerRef} className="w-full h-full relative">
             {!hasToken && (
               <div
-                className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-8 text-center"
-                style={{ background: "var(--bg-secondary)" }}
+                className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-8 text-center bg-[var(--bg-tertiary)]"
               >
-                <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 max-w-sm">
-                  <div className="text-cyan-400 font-mono text-sm font-bold mb-1">
+                <div className="p-5 rounded-2xl bg-white border border-[var(--border-subtle)] max-w-sm shadow-none">
+                  <div className="text-sky-700 font-mono text-sm font-bold mb-1">
                     Mapbox Satellite Token
                   </div>
-                  <p className="text-xs text-slate-400 mb-3">
+                  <p className="text-xs text-[var(--text-muted)] mb-3">
                     Mapbox 3D Globe requires an API key in <code>.env.local</code>.
                     Switch to <strong>📡 Deep-Zoom Radar GIS</strong> for offline
                     zero-dependency acoustic bathymetry with pan &amp; zoom!
                   </p>
                   <button
                     onClick={() => setViewMode("radar")}
-                    className="px-4 py-1.5 rounded-lg bg-cyan-500 text-slate-950 font-bold text-xs hover:bg-cyan-400 transition-colors cursor-pointer"
+                    className="px-4 py-1.5 rounded-none bg-sky-600 text-white font-bold text-xs hover:bg-sky-700 transition-colors cursor-pointer shadow-none"
                   >
                     Switch to Deep-Zoom Radar GIS
                   </button>
@@ -557,10 +472,7 @@ export default function TacticalMap({
       </div>
 
       {/* Footer Info */}
-      <div
-        className="flex items-center justify-between px-4 py-1.5 border-t text-[11px] font-mono text-slate-400"
-        style={{ borderColor: "var(--border-subtle)", background: "#060a13" }}
-      >
+      <div className="flex items-center justify-between px-4 py-1.5 bg-[var(--bg-tertiary)] border-t border-[var(--border-subtle)] text-[11px] font-mono text-[var(--text-muted)]">
         <span>DATUM: WGS84 • GRID: 75m SWATH TRANSECT</span>
         <span>RESOLUTION: 0.146 m/px • SUBSEA ACOUSTIC BEAM</span>
       </div>

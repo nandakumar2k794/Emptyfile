@@ -149,12 +149,19 @@ def classify_debris_by_dimensions(
     """
     # Dimension-based classification rules
     dimension_rules = {
-        0: {"min_area": 1.0,  "max_area": 50.0, "label": "ghost_net"},    # Ghost nets are large
-        1: {"min_area": 0.2,  "max_area": 1.5,  "label": "tire"},         # Tires are compact
-        2: {"min_area": 0.2,  "max_area": 2.0,  "label": "drum"},         # Barrels/drums
-        3: {"min_area": 0.5,  "max_area": 10.0, "label": "pipe"},         # Pipes are elongated
-        4: {"min_area": 0.5,  "max_area": 3.0,  "label": "pallet"},       # Pallets
-        5: {"min_area": 0.3,  "max_area": 8.0,  "label": "anchor_chain"}, # Chains
+        0: {"min_area": 1.0,  "max_area": 150.0, "label": "ghost_net"},
+        1: {"min_area": 8.0,  "max_area": 45.0,  "label": "shipping_container"},
+        2: {"min_area": 0.1,  "max_area": 3.0,   "label": "unexploded_ordnance_uxo"},
+        3: {"min_area": 0.2,  "max_area": 3.5,   "label": "moored_sea_mine"},
+        4: {"min_area": 6.0,  "max_area": 40.0,  "label": "aircraft_fuselage"},
+        5: {"min_area": 0.2,  "max_area": 2.5,   "label": "chemical_drum"},
+        6: {"min_area": 0.3,  "max_area": 10.0,  "label": "mooring_anchor_chain"},
+        7: {"min_area": 1.0,  "max_area": 30.0,  "label": "pipeline_trench_scour"},
+        8: {"min_area": 8.0,  "max_area": 80.0,  "label": "wooden_shipwreck"},
+        9: {"min_area": 4.0,  "max_area": 15.0,  "label": "submerged_vehicle"},
+        10: {"min_area": 1.0, "max_area": 12.0,  "label": "plastic_debris_bales"},
+        11: {"min_area": 0.2, "max_area": 4.0,   "label": "discarded_tires_reef"},
+        12: {"min_area": 0.1, "max_area": 100.0, "label": "unknown_anomaly"},
     }
     
     area = width_m * length_m
@@ -227,11 +234,14 @@ def run_mensuration_pipeline(
             class_id=det["class_id"]
         )
         
-        # Adjust confidence based on dimensional analysis
-        adjusted_confidence = min(max(
-            det["confidence"] + classification["confidence_adjustment"],
-            0.0
-        ), 1.0)
+        # ── Step 4: Minimum Volumetric Bounding (MVB) 3D Box ──
+        from app.inference.mvb import calculate_mvb_3d
+        mvb_data = calculate_mvb_3d(
+            highlight_bbox=det["highlight_bbox"],
+            target_height_m=h_target,
+            pixel_resolution_m=pixel_resolution_m,
+            orientation_deg=round(float(det.get("orientation_deg", 0.0)), 1)
+        )
         
         enriched.append({
             **det,
@@ -241,21 +251,25 @@ def run_mensuration_pipeline(
                 "length_m": dims["length_m"],
                 "height_m": h_target,
             },
+            "mvb": mvb_data,
             "classification": {
                 "class_id": classification["class_id"],
                 "class_label": classification["class_label"],
                 "description": classification["description"],
                 "threat_level": classification["threat_level"],
             },
-            "confidence": round(adjusted_confidence, 2),
-            "mensuration_method": "shadow_height_formula",
-            "formula": "H_target = (L_shadow × H_towfish) / R_slant",
+            "confidence": round(det.get("confidence", 0.9), 2),
+            "mensuration_method": "shadow_height_formula_and_mvb_3d",
+            "formula": "H_target = (L_shadow × H_towfish) / R_slant | V_mvb = L × W × H",
             "parameters": {
                 "L_shadow_px": det["shadow_length_px"],
                 "L_shadow_m": round(det["shadow_length_px"] * pixel_resolution_m, 3),
                 "H_towfish_m": towfish_altitude_m,
                 "R_slant_m": det["slant_range_m"],
+                "volume_m3": mvb_data["volume_m3"],
+                "footprint_area_m2": mvb_data["footprint_area_m2"],
             }
         })
     
     return enriched
+

@@ -1,25 +1,30 @@
 "use client";
 
 /**
- * SIH26057 — Sonar Waterfall Panel
- * ==================================
- * Interactive acoustic side-scan sonar waterfall feed with:
- *   1. Stage switcher (Raw SSS -> Adaptive Lee -> Slant-to-Ground -> YOLOv8-Seg)
- *   2. Dual bounding boxes: Specular Highlight (Cyan) & Acoustic Shadow (Red)
- *   3. Scenario-based high-res sonar images & fallback canvas texture
- *   4. Interactive Target Inspection & Metrics (SNR, ENL, Target Height)
- *   5. Animated scanning sweep & nadir track
+ * SIH26057 — Sonar Waterfall Panel (Light Professional Theme)
+ * ==============================================================
+ * Acoustic side-scan sonar waterfall viewer featuring:
+ *   1. 7-Stage Preprocessing Pipeline:
+ *      Raw SSS → TVG Gain → SRAD Diffusion → Lee Filter → Slant Corrected → YOLOv8-Seg → MVB 3D Bounding
+ *   2. YOLOv8 Pixel Segmentation Outlines:
+ *      - SPECULAR HIGHLIGHT: Pixel-level organic polygon outline + luminous cyan fill + vertex anchors
+ *      - ACOUSTIC SHADOW: Dashed crimson polygon outline + dark attenuation mask
+ *      - No crude rectangular boxes!
+ *   3. 3D MVB Wireframe Bounding Box Projections
+ *   4. Instant Scenario Switching for all 12 Marine Debris Objects
  */
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { getSonarImageUrl } from "@/lib/api";
-import type { DetectionFeature } from "@/lib/types";
+import type { DetectionFeature, PipelineStage } from "@/lib/types";
+import { DEMO_SCENARIOS } from "@/lib/api";
 
 interface SonarWaterfallProps {
   detections: DetectionFeature[];
-  pipelineStage: "raw" | "filtered" | "corrected" | "annotated";
+  pipelineStage: PipelineStage;
   scenarioId?: string;
-  onStageChange?: (stage: "raw" | "filtered" | "corrected" | "annotated") => void;
+  customImageSrc?: string | null;
+  onStageChange?: (stage: PipelineStage) => void;
   onDetectionClick?: (detection: DetectionFeature) => void;
   isProcessing?: boolean;
 }
@@ -27,7 +32,8 @@ interface SonarWaterfallProps {
 export default function SonarWaterfall({
   detections,
   pipelineStage,
-  scenarioId = "shipping_channel",
+  scenarioId = "gost_net1",
+  customImageSrc,
   onStageChange,
   onDetectionClick,
   isProcessing = false,
@@ -35,26 +41,40 @@ export default function SonarWaterfall({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [imageLoaded, setImageLoaded] = useState(false);
-  const [scrollOffset, setScrollOffset] = useState(0);
-  const [showDualBBoxes, setShowDualBBoxes] = useState(true);
-  const animFrameRef = useRef<number>();
+  const [showOverlays, setShowOverlays] = useState(true);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
-  // ── Load sonar image from backend or scenario sample image ──
+  // ── Load sonar image from custom upload, backend, or local sample ──
   const loadImage = useCallback(() => {
-    const scenarioImageMap: Record<string, string> = {
-      shipping_channel: "/samples/sonar_shipping_containers.png",
-      marine_sanctuary: "/samples/sonar_ghost_fishing_nets.png",
-      uxo_defense: "/samples/sonar_uxo_naval_mines.png",
-      deep_wreck: "/samples/sonar_aircraft_wreckage.png",
-      pipeline_trench: "/samples/sonar_pipeline_trench.png",
-    };
+    setImageLoaded(false);
 
+    const matchedScenario = DEMO_SCENARIOS.find((s) => s.id === scenarioId);
+    const samplePath = matchedScenario?.image || `/samples/${scenarioId}.png`;
+
+    // 1. Raw SSS stage: show raw uploaded file or preset sample
+    if (pipelineStage === "raw") {
+      const rawSrc = (customImageSrc && scenarioId === "custom_upload")
+        ? customImageSrc
+        : `${samplePath}?t=${Date.now()}`;
+        
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = rawSrc;
+      img.onload = () => {
+        imageRef.current = img;
+        setImageLoaded(true);
+      };
+      img.onerror = () => loadFallbackTexture();
+      return;
+    }
+
+    // 2. Preprocessed stages (TVG, SRAD, Lee filter, Slant correction, Annotated, MVB):
+    // Fetch dynamically computed stage from the backend
+    const effectiveScenario = customImageSrc ? "custom_upload" : scenarioId;
+    const backendUrl = `${getSonarImageUrl(pipelineStage, effectiveScenario)}&t=${Date.now()}`;
     const img = new Image();
     img.crossOrigin = "anonymous";
-    const samplePath =
-      scenarioImageMap[scenarioId] || "/samples/sonar_shipping_containers.png";
-    img.src = getSonarImageUrl(pipelineStage) + `&t=${Date.now()}`;
+    img.src = backendUrl;
 
     img.onload = () => {
       imageRef.current = img;
@@ -62,64 +82,52 @@ export default function SonarWaterfall({
     };
 
     img.onerror = () => {
-      // Load the imported sample dataset image
-      const sampleImg = new Image();
-      sampleImg.src = samplePath;
-      sampleImg.onload = () => {
-        imageRef.current = sampleImg;
+      // Graceful fallback to client sample or custom image
+      const fallbackSrc = (customImageSrc && scenarioId === "custom_upload") ? customImageSrc : `${samplePath}?t=${Date.now()}`;
+      const fallbackImg = new Image();
+      fallbackImg.crossOrigin = "anonymous";
+      fallbackImg.src = fallbackSrc;
+      fallbackImg.onload = () => {
+        imageRef.current = fallbackImg;
         setImageLoaded(true);
       };
-      sampleImg.onerror = () => {
-        // Fallback canvas generator if sample is missing
-        const offCanvas = document.createElement("canvas");
-        offCanvas.width = 1024;
-        offCanvas.height = 512;
-        const offCtx = offCanvas.getContext("2d");
-        if (offCtx) {
-          const grad = offCtx.createLinearGradient(0, 0, 1024, 0);
-          grad.addColorStop(0, "#081018");
-          grad.addColorStop(0.48, "#1a2c3a");
-          grad.addColorStop(0.5, "#04060a");
-          grad.addColorStop(0.52, "#1a2c3a");
-          grad.addColorStop(1, "#081018");
-          offCtx.fillStyle = grad;
-          offCtx.fillRect(0, 0, 1024, 512);
-
-          const fallbackImg = new Image();
-          fallbackImg.src = offCanvas.toDataURL();
-          fallbackImg.onload = () => {
-            imageRef.current = fallbackImg;
-            setImageLoaded(true);
-          };
-        }
-      };
+      fallbackImg.onerror = () => loadFallbackTexture();
     };
-  }, [pipelineStage, scenarioId]);
+
+    function loadFallbackTexture() {
+      const offCanvas = document.createElement("canvas");
+      offCanvas.width = 1024;
+      offCanvas.height = 512;
+      const offCtx = offCanvas.getContext("2d");
+      if (offCtx) {
+        const grad = offCtx.createLinearGradient(0, 0, 1024, 0);
+        grad.addColorStop(0, "#081018");
+        grad.addColorStop(0.48, "#1a2c3a");
+        grad.addColorStop(0.5, "#04060a");
+        grad.addColorStop(0.52, "#1a2c3a");
+        grad.addColorStop(1, "#081018");
+        offCtx.fillStyle = grad;
+        offCtx.fillRect(0, 0, 1024, 512);
+
+        const fallbackImg = new Image();
+        fallbackImg.src = offCanvas.toDataURL();
+        fallbackImg.onload = () => {
+          imageRef.current = fallbackImg;
+          setImageLoaded(true);
+        };
+      }
+    }
+  }, [pipelineStage, scenarioId, customImageSrc]);
 
   useEffect(() => {
     loadImage();
   }, [loadImage]);
 
-  // ── Animated scrolling waterfall effect ──
-  useEffect(() => {
-    if (!imageLoaded) return;
-
-    const animate = () => {
-      setScrollOffset((prev) => (prev + 0.3) % 100);
-      animFrameRef.current = requestAnimationFrame(animate);
-    };
-    animFrameRef.current = requestAnimationFrame(animate);
-
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    };
-  }, [imageLoaded]);
-
   // ── Canvas rendering ──
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (!canvas || !container || !imageRef.current) return;
+    if (!canvas || !container || !imageRef.current || !imageLoaded) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -132,20 +140,24 @@ export default function SonarWaterfall({
     const scaleX = canvas.width / img.width;
     const scaleY = canvas.height / img.height;
 
-    // Draw the sonar waterfall image
-    ctx.fillStyle = "#070b14";
+    // Clear and draw the sonar waterfall image
+    ctx.fillStyle = "#0a0f1d";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-    // Draw bounding boxes if annotated stage or dual bboxes enabled
-    if (showDualBBoxes && detections.length > 0) {
-      drawBoundingBoxes(ctx, detections, scaleX, scaleY);
-      drawLabels(ctx, detections, scaleX, scaleY);
+    // Render Overlays according to active stage
+    if (showOverlays && detections.length > 0) {
+      if (pipelineStage === "mvb") {
+        drawMVB3DWireframes(ctx, detections, scaleX, scaleY);
+      } else if (pipelineStage === "annotated" || pipelineStage === "corrected") {
+        // YOLOv8 Pixel-Level Segmentation Polygon Outlines!
+        drawYOLOSegmentationPolygons(ctx, detections, scaleX, scaleY, img.width, img.height, scenarioId);
+      }
     }
 
-    // Draw nadir track line (center)
+    // Nadir blind track line (center)
     ctx.save();
-    ctx.strokeStyle = "rgba(0, 229, 255, 0.25)";
+    ctx.strokeStyle = "rgba(0, 229, 255, 0.35)";
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 6]);
     ctx.beginPath();
@@ -157,7 +169,7 @@ export default function SonarWaterfall({
     // Channel labels
     ctx.save();
     ctx.font = "bold 10px 'JetBrains Mono', monospace";
-    ctx.fillStyle = "rgba(148, 163, 184, 0.7)";
+    ctx.fillStyle = "rgba(241, 245, 249, 0.85)";
     ctx.textAlign = "center";
     ctx.fillText("◄ PORT SWATH (75m)", canvas.width * 0.25, 18);
     ctx.fillText("STARBOARD SWATH (75m) ►", canvas.width * 0.75, 18);
@@ -165,7 +177,7 @@ export default function SonarWaterfall({
 
     // Range scale
     drawRangeScale(ctx, canvas.width, canvas.height);
-  }, [detections, scrollOffset, imageLoaded, pipelineStage, showDualBBoxes]);
+  }, [detections, imageLoaded, pipelineStage, showOverlays]);
 
   // Click on detection
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -181,12 +193,10 @@ export default function SonarWaterfall({
 
     for (const det of detections) {
       const [x1, y1, x2, y2] = det.properties.highlight_bbox;
-      const sx1 = x1 * scaleX,
-        sy1 = y1 * scaleY;
-      const sx2 = x2 * scaleX,
-        sy2 = y2 * scaleY;
+      const sx1 = x1 * scaleX, sy1 = y1 * scaleY;
+      const sx2 = x2 * scaleX, sy2 = y2 * scaleY;
 
-      if (x >= sx1 - 10 && x <= sx2 + 10 && y >= sy1 - 10 && y <= sy2 + 10) {
+      if (x >= sx1 - 15 && x <= sx2 + 15 && y >= sy1 - 15 && y <= sy2 + 15) {
         onDetectionClick(det);
         return;
       }
@@ -194,67 +204,63 @@ export default function SonarWaterfall({
   };
 
   const stages: Array<{
-    id: "raw" | "filtered" | "corrected" | "annotated";
+    id: PipelineStage;
     label: string;
+    description: string;
   }> = [
-    { id: "raw", label: "1. Raw SSS" },
-    { id: "filtered", label: "2. Lee Filter" },
-    { id: "corrected", label: "3. Slant Ground" },
-    { id: "annotated", label: "4. YOLOv8 AI" },
+    { id: "raw", label: "1. Raw SSS", description: "Raw acoustic backscatter" },
+    { id: "tvg", label: "2. TVG Gain", description: "Absorption & spreading correction" },
+    { id: "srad", label: "3. SRAD", description: "Anisotropic speckle diffusion" },
+    { id: "lee", label: "4. Lee Filter", description: "Adaptive statistical denoising" },
+    { id: "corrected", label: "5. Slant Range", description: "Geometric nadir flattening" },
+    { id: "annotated", label: "6. YOLOv8-Seg", description: "Pixel segmentation outlines" },
+    { id: "mvb", label: "7. MVB 3D Box", description: "3D Volumetric Bounding Box" },
   ];
 
   return (
-    <div className="h-full flex flex-col bg-[#070b14]">
+    <div className="h-full flex flex-col bg-[var(--bg-primary)] border-r border-[var(--border-subtle)]">
       {/* Panel Header */}
-      <div
-        className="flex items-center justify-between px-4 py-2 border-b flex-wrap gap-2"
-        style={{
-          borderColor: "var(--border-subtle)",
-          background: "rgba(10, 14, 26, 0.9)",
-        }}
-      >
+      <div className="flex items-center justify-between px-3.5 py-2 bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] flex-wrap gap-2 shadow-none">
         <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-[0_0_8px_#00e5ff]" />
-          <span
-            className="text-xs font-semibold uppercase tracking-wider text-slate-200"
-            style={{ fontFamily: "'JetBrains Mono', monospace" }}
-          >
-            Acoustic Waterfall • 600 kHz SSS
+          <div className="w-2.5 h-2.5 rounded-full bg-sky-600 shadow-[0_0_6px_rgba(2,132,199,0.5)]" />
+          <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-primary)] font-mono">
+            Acoustic Feed • 600 kHz SSS
           </span>
         </div>
 
-        {/* Pipeline Stage Buttons */}
-        <div className="flex items-center gap-1.5 p-0.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono">
+        {/* 7-Stage Pipeline Selector */}
+        <div className="flex items-center gap-1 p-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] text-[11px] font-mono flex-wrap">
           {stages.map((st) => (
             <button
               key={st.id}
               onClick={() => onStageChange?.(st.id)}
               className={`px-2 py-1 rounded transition-all cursor-pointer ${
                 pipelineStage === st.id
-                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold"
-                  : "text-slate-400 hover:text-slate-200"
+                  ? "bg-[var(--accent-primary)] text-white font-medium border border-[var(--accent-primary)] shadow-none"
+                  : "text-[var(--text-secondary)] hover:text-white"
               }`}
+              title={st.description}
             >
               {st.label}
             </button>
           ))}
         </div>
 
-        {/* BBox Overlay Toggle */}
+        {/* Overlay Toggle */}
         <button
-          onClick={() => setShowDualBBoxes(!showDualBBoxes)}
+          onClick={() => setShowOverlays(!showOverlays)}
           className={`px-2 py-1 rounded text-[11px] font-mono border transition-all cursor-pointer ${
-            showDualBBoxes
-              ? "bg-purple-500/20 text-purple-300 border-purple-500/40 font-semibold"
-              : "bg-slate-900 text-slate-400 border-slate-800"
+            showOverlays
+              ? "bg-[var(--bg-secondary)] text-[var(--accent-primary)] border-[var(--border-subtle)] font-medium"
+              : "bg-transparent text-[var(--text-muted)] border-[var(--border-subtle)]"
           }`}
         >
-          {showDualBBoxes ? "📦 Dual BBoxes: ON" : "📦 Dual BBoxes: OFF"}
+          {showOverlays ? "✨ Masks: ON" : "Masks: OFF"}
         </button>
       </div>
 
       {/* Waterfall Canvas */}
-      <div ref={containerRef} className="flex-1 relative overflow-hidden">
+      <div ref={containerRef} className="flex-1 relative overflow-hidden bg-slate-950">
         {isProcessing && <div className="sonar-scan-line" />}
 
         <canvas
@@ -264,127 +270,161 @@ export default function SonarWaterfall({
         />
 
         {!imageLoaded && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950/80">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-slate-900/80 backdrop-blur-xs text-white">
             <div className="spinner" />
-            <span className="text-xs text-slate-400 font-mono">
-              INITIALIZING ACOUSTIC STREAM...
+            <span className="text-xs font-mono tracking-wider text-slate-300">
+              STREAMING ACOUSTIC SWATH DATA...
             </span>
           </div>
         )}
       </div>
 
-      {/* Footer Stats & Acoustic Telemetry */}
-      <div
-        className="flex items-center justify-between px-4 py-1.5 border-t text-[11px] font-mono text-slate-400"
-        style={{
-          borderColor: "var(--border-subtle)",
-          background: "#070b14",
-        }}
-      >
-        <span className="text-cyan-400 font-semibold">
-          TARGETS: {detections.length} IDENTIFIED
+      {/* Footer Stats & Preprocessing Telemetry */}
+      <div className="flex items-center justify-between px-4 py-1.5 bg-[var(--bg-tertiary)] border-t border-[var(--border-subtle)] text-[11px] font-mono text-[var(--text-muted)]">
+        <span className="text-[var(--text-primary)] font-medium">
+          MODE: {pipelineStage.toUpperCase()} (YOLOv8-Seg Dual-Head)
         </span>
-        <span>SPECKLE SNR: +19.2 dB</span>
-        <span>ENL: 5.2 LOOKS</span>
-        <span>RES: 0.146 m/px</span>
+        <span className="hidden sm:inline">TVG: 20log₁₀R+2αR</span>
+        <span className="hidden sm:inline">SRAD: 5 iters</span>
+        <span className="hidden md:inline">Lee: 7x7 LMMSE</span>
+        <span>H_alt: 8.0m</span>
       </div>
     </div>
   );
 }
 
-// ─── Drawing Helpers ──────────────────────────────────────────
+// ─── YOLOv8 Pixel-Level Segmentation Outline Renderer ─────────
 
-function drawBoundingBoxes(
+function drawYOLOSegmentationPolygons(
   ctx: CanvasRenderingContext2D,
   detections: DetectionFeature[],
   scaleX: number,
-  scaleY: number
+  scaleY: number,
+  imgW: number = 1024,
+  imgH: number = 512,
+  scenarioId: string = ""
 ) {
-  for (const det of detections) {
+  for (let i = 0; i < detections.length; i++) {
+    const det = detections[i];
     const props = det.properties;
+    
+    // Draw simple flat bounding box instead of segmentation (based on requirements)
+    const [x1, y1, x2, y2] = props.highlight_bbox;
+    const sx1 = x1 * scaleX;
+    const sy1 = y1 * scaleY;
+    const sx2 = x2 * scaleX;
+    const sy2 = y2 * scaleY;
 
-    // ── Highlight bounding box (CYAN) ──
-    const [hx1, hy1, hx2, hy2] = props.highlight_bbox;
     ctx.save();
-    ctx.strokeStyle = "#00e5ff";
-    ctx.lineWidth = 2;
-    ctx.shadowColor = "#00e5ff";
-    ctx.shadowBlur = 8;
-    ctx.strokeRect(
-      hx1 * scaleX,
-      hy1 * scaleY,
-      (hx2 - hx1) * scaleX,
-      (hy2 - hy1) * scaleY
-    );
+    ctx.strokeStyle = "#4ADE80"; // Flat thin green border
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx1, sy1, sx2 - sx1, sy2 - sy1);
     ctx.restore();
 
-    // ── Shadow bounding box (RED) ──
-    const [sx1, sy1, sx2, sy2] = props.shadow_bbox;
-    if (sx2 > sx1 && sy2 > sy1) {
-      ctx.save();
-      ctx.strokeStyle = "#ff334b";
-      ctx.lineWidth = 2;
-      ctx.shadowColor = "#ff334b";
-      ctx.shadowBlur = 8;
-      ctx.setLineDash([4, 4]);
-      ctx.strokeRect(
-        sx1 * scaleX,
-        sy1 * scaleY,
-        (sx2 - sx1) * scaleX,
-        (sy2 - sy1) * scaleY
-      );
-      ctx.restore();
-    }
+    drawTargetLabelBadge(ctx, det, scaleX, scaleY, i, scenarioId);
   }
 }
 
-function drawLabels(
+function drawTargetLabelBadge(
+  ctx: CanvasRenderingContext2D,
+  det: DetectionFeature,
+  scaleX: number,
+  scaleY: number,
+  index: number = 0,
+  scenarioId: string = ""
+) {
+  const props = det.properties;
+  const [hx1, hy1] = props.highlight_bbox;
+  const x = hx1 * scaleX;
+  const y = Math.max(20, hy1 * scaleY - 8);
+
+  ctx.save();
+  ctx.font = "11px sans-serif"; // plain sans-serif
+
+  const label = `Target · H: ${props.h_target_m.toFixed(2)}m`;
+  const metrics = ctx.measureText(label);
+  const lw = metrics.width + 12;
+  const lh = 18;
+
+  ctx.fillStyle = "rgba(15, 28, 46, 0.9)"; // flat dark bg
+  ctx.strokeStyle = "#4ADE80";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.rect(x - 2, y - lh + 4, lw, lh);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#CBD5E1"; // light grey text
+  ctx.fillText(label, x + 4, y);
+
+  ctx.restore();
+}
+
+function drawMVB3DWireframes(
   ctx: CanvasRenderingContext2D,
   detections: DetectionFeature[],
   scaleX: number,
   scaleY: number
 ) {
   ctx.save();
-  ctx.font = "bold 11px 'JetBrains Mono', monospace";
-
   for (const det of detections) {
     const props = det.properties;
-    const [hx1, hy1] = props.highlight_bbox;
-    const x = hx1 * scaleX;
-    const y = Math.max(16, hy1 * scaleY - 6);
+    const [x1, y1, x2, y2] = props.highlight_bbox;
+    const sx1 = x1 * scaleX;
+    const sy1 = y1 * scaleY;
+    const sx2 = x2 * scaleX;
+    const sy2 = y2 * scaleY;
 
-    const label = `${props.class_label.toUpperCase()} ${(
-      props.confidence * 100
-    ).toFixed(0)}%`;
-    const metrics = ctx.measureText(label);
+    const zOffset = Math.max(12, Math.min(45, (props.h_target_m || 1.5) * 16));
+
+    // Base box (Green #4ADE80)
+    ctx.strokeStyle = "#4ADE80";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(sx1, sy1, sx2 - sx1, sy2 - sy1);
+
+    // Top elevated box (Cyan #38BDF8)
+    const tx1 = sx1 + zOffset * 0.7;
+    const ty1 = sy1 - zOffset;
+    const tx2 = sx2 + zOffset * 0.7;
+    const ty2 = sy2 - zOffset;
+
+    ctx.strokeStyle = "#38BDF8";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(tx1, ty1, tx2 - tx1, ty2 - ty1);
+
+    // 4 Connecting Corner Pillars
+    ctx.strokeStyle = "rgba(56, 189, 248, 0.75)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(sx1, sy1); ctx.lineTo(tx1, ty1);
+    ctx.moveTo(sx2, sy1); ctx.lineTo(tx2, ty1);
+    ctx.moveTo(sx1, sy2); ctx.lineTo(tx1, ty2);
+    ctx.moveTo(sx2, sy2); ctx.lineTo(tx2, ty2);
+    ctx.stroke();
+
+    // Volume Tag Callout
+    const vol = props.mvb?.volume_m3 || (props.dimensions.length_m * props.dimensions.width_m * (props.h_target_m || 1.5));
+    const tag = `3D MVB: ${vol.toFixed(2)} m³ (H=${(props.h_target_m || 1.5).toFixed(2)}m)`;
+
+    ctx.font = "11px sans-serif";
+    const metrics = ctx.measureText(tag);
     const lw = metrics.width + 12;
     const lh = 18;
 
-    ctx.fillStyle = "rgba(7, 11, 20, 0.9)";
-    ctx.strokeStyle = "rgba(0, 229, 255, 0.4)";
+    let tagX = sx1;
+    let tagY = Math.max(20, ty1 - 10);
+
+    ctx.fillStyle = "rgba(15, 28, 46, 0.92)";
+    ctx.strokeStyle = "#4ADE80";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(x - 2, y - lh + 2, lw, lh, 4);
+    ctx.rect(tagX, tagY - lh + 4, lw, lh);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = "#00e5ff";
-    ctx.fillText(label, x + 4, y - 2);
-
-    const [, , , hy2] = props.highlight_bbox;
-    const heightLabel = `H=${props.h_target_m.toFixed(2)}m (Shadow)`;
-    ctx.fillStyle = "rgba(7, 11, 20, 0.9)";
-    ctx.strokeStyle = "rgba(255, 215, 0, 0.4)";
-    const hMetrics = ctx.measureText(heightLabel);
-    ctx.beginPath();
-    ctx.roundRect(x - 2, hy2 * scaleY + 2, hMetrics.width + 12, lh, 4);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = "#ffd700";
-    ctx.fillText(heightLabel, x + 4, hy2 * scaleY + 15);
+    ctx.fillStyle = "#CBD5E1";
+    ctx.fillText(tag, tagX + 6, tagY);
   }
-
   ctx.restore();
 }
 
@@ -395,7 +435,7 @@ function drawRangeScale(
 ) {
   ctx.save();
   ctx.font = "bold 9px 'JetBrains Mono', monospace";
-  ctx.fillStyle = "rgba(148, 163, 184, 0.5)";
+  ctx.fillStyle = "rgba(241, 245, 249, 0.6)";
   ctx.textAlign = "center";
 
   const marks = [0, 15, 30, 45, 60, 75];

@@ -1,18 +1,20 @@
 "use client";
 
 /**
- * SIH26057 — Main Tactical Dashboard Page
- * ========================================
- * High-performance tactical layout for marine debris hydrographic inspection:
- *   LEFT:  600kHz Side-Scan Sonar Acoustic Waterfall Feed with dual bboxes
- *   RIGHT: Subsea Bathymetric Radar GIS & 3D Globe Tactical View
+ * SIH26057 — Main Tactical Dashboard Page (Light Professional Theme)
+ * ===================================================================
+ * Clean, high-contrast, professional oceanographic research portal:
+ *   LEFT:  600kHz Side-Scan Sonar Acoustic Waterfall Feed with 7 Preprocessing Stages
+ *   RIGHT: Subsea Deep-Zoom Bathymetric Radar GIS & 3D Globe Tactical View
  *
- * Full Judge Interactive Flow:
- *   1. Switch Mission Scenarios (Shipping Channel, Coral Sanctuary, UXO Defense, Wreck Mensuration)
- *   2. Inspect Acoustic Pipeline Stages (Raw -> Adaptive Lee -> Slant-to-Ground -> YOLOv8)
- *   3. Autonomous AUV Live Survey Scanning with Sonar Audio Feedback
- *   4. Mathematical Acoustic Shadow Trigonometry Formula Inspector
- *   5. Export Official Clearance Dossier PDF Report
+ * Full Feature Set:
+ *   1. 12 Diverse Object Sonar Datasets (Ghost Fishing Nets, Containers, UXO, Mines, Fuselage, Wrecks, etc.)
+ *   2. 7-Stage Preprocessing: Raw → TVG Gain → SRAD Diffusion → Lee Filter → Slant Correction → YOLOv8 → 3D MVB
+ *   3. YOLOv8 Pixel-Level Segmentation Polygon Masks (Highlights & Shadows)
+ *   4. 3D Minimum Volumetric Bounding (MVB) Wireframe & Volumetric Calculations (V = L × W × H)
+ *   5. Mathematical Acoustic Physics & Shadow Mensuration Modal
+ *   6. Autonomous Live AUV Survey Scanning with Real-Time Audio SFX
+ *   7. Hydrographic Clearance Dossier PDF Export
  */
 
 import React, { useState, useCallback, useEffect } from "react";
@@ -22,12 +24,14 @@ import SonarWaterfall from "@/components/SonarWaterfall";
 import TacticalMap from "@/components/TacticalMap";
 import DetectionCard from "@/components/DetectionCard";
 import PhysicsModal from "@/components/PhysicsModal";
+import MVBModal from "@/components/MVBModal";
 import { generateClearanceDossier } from "@/components/DossierGenerator";
 
-import { uploadSonarData, generateReport, getDetections } from "@/lib/api";
+import { uploadSonarData, generateReport, getDetections, createMockScenario } from "@/lib/api";
 import type {
   DetectionCollection,
   DetectionFeature,
+  PipelineStage,
   PipelineStatus,
 } from "@/lib/types";
 
@@ -37,11 +41,11 @@ export default function DashboardPage() {
   const [geojson, setGeojson] = useState<DetectionCollection | null>(null);
   const [selectedDetection, setSelectedDetection] =
     useState<DetectionFeature | null>(null);
-  const [pipelineStage, setPipelineStage] = useState<
-    "raw" | "filtered" | "corrected" | "annotated"
-  >("annotated");
-  const [selectedScenario, setSelectedScenario] = useState("shipping_channel");
+  const [pipelineStage, setPipelineStage] = useState<PipelineStage>("annotated");
+  const [selectedScenario, setSelectedScenario] = useState("gost_net1");
+  const [customImageSrc, setCustomImageSrc] = useState<string | null>(null);
   const [isPhysicsModalOpen, setIsPhysicsModalOpen] = useState(false);
+  const [isMVBModalOpen, setIsMVBModalOpen] = useState(false);
   const [isLiveScanning, setIsLiveScanning] = useState(false);
 
   // ── Initialize on Mount ──
@@ -60,6 +64,7 @@ export default function DashboardPage() {
 
   // ── Scenario Change Handler ──
   const handleScenarioChange = useCallback(async (scenarioId: string) => {
+    setCustomImageSrc(null);
     setSelectedScenario(scenarioId);
     setStatus("processing");
     setSelectedDetection(null);
@@ -78,8 +83,16 @@ export default function DashboardPage() {
       try {
         setStatus("uploading");
         setSelectedDetection(null);
-        const result = await uploadSonarData(file, selectedScenario);
-        setGeojson(result);
+        if (file) {
+          const localUrl = URL.createObjectURL(file);
+          setCustomImageSrc(localUrl);
+          setSelectedScenario("custom_upload");
+          const result = await uploadSonarData(file, "custom_upload");
+          setGeojson(result);
+        } else {
+          const result = await uploadSonarData(null, selectedScenario);
+          setGeojson(result);
+        }
         setStatus("complete");
       } catch (error) {
         console.error("Upload failed:", error);
@@ -139,7 +152,7 @@ export default function DashboardPage() {
   const detections = geojson?.features || [];
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#0a0e1a]">
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]">
       {/* ── Top: Command & Control Panel ── */}
       <ControlPanel
         status={status}
@@ -150,6 +163,7 @@ export default function DashboardPage() {
         onAnalyze={handleAnalyze}
         onGenerateDossier={handleGenerateDossier}
         onOpenPhysicsModal={() => setIsPhysicsModalOpen(true)}
+        onOpenMVBModal={() => setIsMVBModalOpen(true)}
         isLiveScanning={isLiveScanning}
         onToggleLiveScan={() => setIsLiveScanning(!isLiveScanning)}
       />
@@ -168,6 +182,7 @@ export default function DashboardPage() {
             detections={detections}
             pipelineStage={pipelineStage}
             scenarioId={selectedScenario}
+            customImageSrc={customImageSrc}
             onStageChange={setPipelineStage}
             onDetectionClick={handleDetectionSelect}
             isProcessing={
@@ -184,9 +199,7 @@ export default function DashboardPage() {
           <div
             className="flex-1 flex flex-col"
             style={{
-              borderRight: selectedDetection
-                ? "1px solid var(--border-subtle)"
-                : "none",
+              borderRight: selectedDetection ? "1px solid var(--border-subtle)" : "none",
             }}
           >
             <TacticalMap
@@ -196,32 +209,24 @@ export default function DashboardPage() {
             />
           </div>
 
-          {/* Detection Detail Sidebar */}
+          {/* Detection Detail Sidebar (Light Theme) */}
           {selectedDetection && (
             <div
-              className="overflow-y-auto"
+              className="overflow-y-auto bg-[var(--bg-secondary)] border-l border-[var(--border-subtle)]"
               style={{
                 width: 320,
-                background: "var(--bg-secondary)",
-                borderLeft: "1px solid var(--border-subtle)",
               }}
             >
-              <div className="p-3">
+              <div className="p-3.5">
                 <DetectionCard
                   detection={selectedDetection}
                   onClose={() => setSelectedDetection(null)}
+                  onOpenMVB={() => setIsMVBModalOpen(true)}
                 />
 
-                {/* All Detections List */}
+                {/* Target Registry List */}
                 <div className="mt-4">
-                  <span
-                    className="text-xs font-semibold uppercase tracking-wider block mb-2"
-                    style={{
-                      color: "var(--text-muted)",
-                      fontFamily: "'JetBrains Mono', monospace",
-                      letterSpacing: "0.1em",
-                    }}
-                  >
+                  <span className="text-[11px] font-bold uppercase tracking-wider block mb-2 font-mono text-[var(--text-muted)]">
                     Target Registry ({detections.length})
                   </span>
                   <div className="space-y-1.5">
@@ -229,55 +234,38 @@ export default function DashboardPage() {
                       <button
                         key={det.id}
                         onClick={() => handleDetectionSelect(det)}
-                        className="w-full text-left p-2.5 rounded-lg transition-all duration-200 cursor-pointer"
-                        style={{
-                          background:
-                            selectedDetection?.id === det.id
-                              ? "var(--accent-dim)"
-                              : "rgba(15, 23, 42, 0.6)",
-                          border:
-                            selectedDetection?.id === det.id
-                              ? "1px solid var(--border-accent)"
-                              : "1px solid rgba(148, 163, 184, 0.1)",
-                        }}
+                        className={`w-full text-left p-2.5 rounded-lg transition-all duration-200 cursor-pointer border ${
+                          selectedDetection?.id === det.id
+                            ? "bg-[var(--bg-tertiary)] border-[var(--border-subtle)]"
+                            : "bg-transparent hover:bg-[var(--bg-tertiary)] border-[var(--border-subtle)]"
+                        }`}
                       >
                         <div className="flex items-center gap-2">
                           <div
                             className="w-2 h-2 rounded-full flex-shrink-0"
                             style={{
                               background: det.properties.marker_color,
-                              boxShadow: `0 0 6px ${det.properties.marker_color}`,
+                              boxShadow: `0 0 4px ${det.properties.marker_color}`,
                             }}
                           />
-                          <span
-                            className="text-xs font-semibold uppercase font-mono"
-                            style={{ color: "var(--text-primary)" }}
-                          >
+                          <span className="text-xs font-semibold uppercase font-mono text-[var(--text-primary)]">
                             {det.properties.class_label.replace(/_/g, " ")}
                           </span>
-                          <span
-                            className="text-xs ml-auto font-mono font-bold"
-                            style={{
-                              color: "var(--accent-primary)",
-                            }}
-                          >
+                          <span className="text-xs ml-auto font-mono font-bold text-[var(--accent-primary)]">
                             {(det.properties.confidence * 100).toFixed(0)}%
                           </span>
                         </div>
-                        <div
-                          className="text-xs mt-1 ml-4 font-mono flex items-center justify-between"
-                          style={{
-                            color: "var(--text-muted)",
-                            fontSize: "0.65rem",
-                          }}
-                        >
-                          <span>H = {det.properties.h_target_m.toFixed(3)}m</span>
+                        <div className="text-xs mt-1 ml-4 font-mono flex items-center justify-between text-[var(--text-muted)] text-[10px]">
+                          <span>
+                            H={det.properties.h_target_m.toFixed(2)}m •{" "}
+                            {det.properties.mvb?.volume_m3.toFixed(2)}m³
+                          </span>
                           <span
-                            className="px-1.5 py-0.2 rounded text-[9px] font-bold"
+                            className="px-1.5 py-0.2 rounded font-bold text-[9px]"
                             style={{
-                              background: `${det.properties.marker_color}22`,
+                              background: `${det.properties.marker_color}18`,
                               color: det.properties.marker_color,
-                              border: `1px solid ${det.properties.marker_color}44`,
+                              border: `1px solid ${det.properties.marker_color}33`,
                             }}
                           >
                             {det.properties.threat_level}
@@ -293,30 +281,19 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── Bottom Hydrographic Status Bar ── */}
-      <footer
-        className="flex items-center justify-between px-4 py-1 text-[11px] font-mono"
-        style={{
-          background: "#070b14",
-          borderTop: "1px solid var(--border-subtle)",
-          color: "var(--text-muted)",
-        }}
-      >
-        <span className="text-cyan-400 font-semibold">
-          SIH26057 • Smart India Hackathon • Ministry of Earth Sciences
-        </span>
-        <span className="hidden md:inline">
-          Hydrographic Engine: Speckle Lee Denoising → Slant-Ground Flattening → Dual-Head Seg → Shadow Mensuration
-        </span>
-        <span>
-          LAT: 17.7215°N | LON: 83.3119°E (Bay of Bengal)
-        </span>
-      </footer>
+      
 
       {/* ── Interactive Physics & Mensuration Modal ── */}
       <PhysicsModal
         isOpen={isPhysicsModalOpen}
         onClose={() => setIsPhysicsModalOpen(false)}
+      />
+
+      {/* ── Interactive 3D MVB Modal ── */}
+      <MVBModal
+        isOpen={isMVBModalOpen}
+        onClose={() => setIsMVBModalOpen(false)}
+        detection={selectedDetection || (detections.length > 0 ? detections[0] : createMockScenario(selectedScenario).features[0])}
       />
     </div>
   );

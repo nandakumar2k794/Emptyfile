@@ -157,6 +157,10 @@ def slant_to_ground_range_correction(
             waterfall_image, towfish_altitude_m, slant_range_max_m
         )
     
+    # Normalize dimensions to match original input image for 1:1 canvas overlay alignment
+    if corrected.shape != (h, w):
+        corrected = cv2.resize(corrected, (w, h), interpolation=cv2.INTER_LINEAR)
+
     return corrected
 
 

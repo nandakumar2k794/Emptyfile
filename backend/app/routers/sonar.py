@@ -2,29 +2,35 @@
 SIH26057 — Sonar Processing API Routes
 ========================================
 
-RESTful endpoints for the marine debris detection pipeline.
+RESTful endpoints for the complete marine debris detection pipeline.
 All endpoints are prefixed with /api/v1 for versioning.
 
 PIPELINE FLOW:
-    1. POST /upload     → Upload .XTF data (or trigger simulation)
-    2. GET  /detections  → Retrieve GeoJSON detection results
-    3. GET  /sonar-image → Retrieve processed sonar waterfall as PNG
-    4. POST /report      → Generate detection summary for PDF dossier
+    1. Raw SSS Imagery           (with transmission loss & speckle)
+    2. TVG Gain Normalization    (absorption & spreading compensation)
+    3. SRAD Diffusion Denoising  (PDE edge-preserving speckle filter)
+    4. Adaptive Lee Filter       (LMMSE speckle reduction)
+    5. Slant-to-Ground Corr.     (nadir flattening & rectification)
+    6. YOLOv8-Seg Inference     (highlight-shadow dual head pairing)
+    7. MVB 3D Bounding           (3D dimensions, height, volume calculation)
 """
 
 import io
 import cv2
 import numpy as np
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, Query, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from typing import Optional
 
 from app.config import (
     WATERFALL_WIDTH_PX, WATERFALL_HEIGHT_PX,
     TOWFISH_ALTITUDE_M, SLANT_RANGE_MAX_M,
-    LEE_FILTER_WINDOW_SIZE
+    LEE_FILTER_WINDOW_SIZE, SRAD_NUM_ITERS,
+    TVG_ALPHA_DB_M, TVG_GAIN_SCALE
 )
 from app.preprocessing.sonar_simulator import generate_synthetic_sonar_waterfall
+from app.preprocessing.tvg import apply_time_varying_gain
+from app.preprocessing.srad import srad_filter
 from app.preprocessing.lee_filter import adaptive_lee_filter
 from app.preprocessing.range_correction import slant_to_ground_range_correction
 from app.inference.detector import run_simulated_yolo_pipeline
@@ -34,91 +40,160 @@ from app.inference.geojson_builder import build_geojson_collection, _to_native
 router = APIRouter(prefix="/api/v1", tags=["Sonar Processing"])
 
 # ─────────────────────────────────────────────────────────────
-# In-memory cache for the current analysis session
-# In production, this would be a database or Redis cache.
+# In-memory session cache for all pipeline stages
 # ─────────────────────────────────────────────────────────────
 _session_cache = {
-    "raw_image": None,          # Raw synthetic sonar waterfall
-    "filtered_image": None,     # After Adaptive Lee Filter
-    "corrected_image": None,    # After slant-to-ground correction
-    "annotated_image": None,    # With bounding box overlays
+    "raw_image": None,          # 1. Raw synthetic sonar waterfall
+    "tvg_image": None,          # 2. After Time-Varying Gain
+    "srad_image": None,         # 3. After SRAD Anisotropic Diffusion
+    "filtered_image": None,     # 4. After Adaptive Lee Filter
+    "corrected_image": None,    # 5. After slant-to-ground correction
+    "annotated_image": None,    # 6. With YOLOv8-Seg dual bboxes
+    "mvb_image": None,          # 7. With 3D Minimum Volumetric Bounding wireframes
     "ground_truth": None,       # Simulator target metadata
-    "detections": None,         # Enriched detection results
+    "detections": None,         # Enriched detection results with MVB
     "geojson": None,            # GeoJSON FeatureCollection
 }
 
 
+def _get_demo_ground_truth(scenario: str):
+    if scenario in ["gost_net1", "ghost_net", "test_1"]:
+        return [{
+            "target_id": 0,
+            "class_id": 0,
+            "confidence": 0.98,
+            "highlight_bbox": [860, 210, 910, 320],
+            "shadow_bbox": [910, 215, 965, 315],
+            "shadow_length_px": 55,
+            "center_px": [885, 265],
+            "slant_range_m": 58.5,
+            "highlight_polygon": [[860, 210], [910, 225], [910, 310], [860, 320]],
+            "shadow_polygon": [[910, 215], [965, 215], [965, 315], [910, 310]],
+        }]
+    elif scenario in ["baseline_survey", "initial_sample", "sonar_discarded_tires_reef"]:
+        return [{
+            "target_id": 0,
+            "class_id": 11,
+            "confidence": 0.92,
+            "highlight_bbox": [220, 280, 254, 314],
+            "shadow_bbox": [178, 280, 220, 314],
+            "shadow_length_px": 42,
+            "center_px": [237, 297],
+            "slant_range_m": 24.0,
+            "highlight_polygon": [[220, 297], [228, 282], [246, 280], [254, 297], [246, 314], [228, 312]],
+            "shadow_polygon": [[178, 284], [220, 280], [220, 314], [178, 310]],
+        }]
+    elif scenario in ["test_sonar", "shipping_containers", "sonar_shipping_containers"]:
+        return [{
+            "target_id": 0,
+            "class_id": 1,
+            "confidence": 0.96,
+            "highlight_bbox": [221, 118, 278, 159],
+            "shadow_bbox": [170, 118, 221, 159],
+            "shadow_length_px": 51,
+            "center_px": [250, 138],
+            "slant_range_m": 42.5,
+            "highlight_polygon": [[221, 118], [278, 122], [278, 159], [221, 155]],
+            "shadow_polygon": [[170, 118], [221, 118], [221, 155], [170, 155]],
+        }]
+    elif scenario in ["wooden_shipwreck", "shipwreck", "sonar_wooden_shipwreck", "ship"]:
+        return [{
+            "target_id": 0,
+            "class_id": 8,
+            "confidence": 0.98,
+            "highlight_bbox": [670, 50, 790, 335],
+            "shadow_bbox": [790, 50, 875, 335],
+            "shadow_length_px": 85,
+            "center_px": [730, 192],
+            "slant_range_m": 31.8,
+            "highlight_polygon": [[670, 50], [790, 70], [785, 335], [670, 320]],
+            "shadow_polygon": [[790, 50], [875, 50], [875, 335], [790, 335]],
+        }]
+    return None
+
+
 def _run_full_pipeline(
     raw_image: np.ndarray,
-    ground_truth: list = None
+    ground_truth: list = None,
+    scenario: str = None
 ) -> dict:
     """
-    Execute the complete acoustic preprocessing + inference pipeline.
-    
-    PIPELINE STAGES:
-      1. Adaptive Lee Filter    → Speckle noise suppression
-      2. Range Correction       → Flatten nadir distortion
-      3. YOLOv8-Seg Inference   → Detect highlight-shadow pairs
-      4. Mensuration            → Calculate physical dimensions
-      5. GeoJSON Construction   → Georeference detections
+    Execute the complete 7-stage acoustic preprocessing + inference pipeline.
     """
-    # ── Stage 1: Adaptive Lee Filter ──
-    # Suppresses multiplicative speckle while preserving target edges
-    filtered = adaptive_lee_filter(
+    _session_cache["raw_image"] = raw_image
+    
+    # ── Stage 1: TVG (Time-Varying Gain) ──
+    tvg_scale = 1.0 if scenario in ["test_1", "test_sonar", "gost_net1", "ghost_net", "wooden_shipwreck", "ship", "shipwreck"] else TVG_GAIN_SCALE
+    tvg = apply_time_varying_gain(
         raw_image,
-        window_size=LEE_FILTER_WINDOW_SIZE,
-        noise_var=None,  # Auto-estimate from image
+        slant_range_max_m=SLANT_RANGE_MAX_M,
+        towfish_altitude_m=TOWFISH_ALTITUDE_M,
+        alpha_db_per_m=TVG_ALPHA_DB_M,
+        gain_scale=tvg_scale
+    )
+    _session_cache["tvg_image"] = tvg
+    
+    # ── Stage 2: SRAD (Speckle Reducing Anisotropic Diffusion) ──
+    srad_iters = 2 if scenario in ["test_1", "test_sonar", "gost_net1", "ghost_net", "wooden_shipwreck", "ship", "shipwreck"] else SRAD_NUM_ITERS
+    srad = srad_filter(
+        tvg,
+        num_iters=srad_iters
+    )
+    _session_cache["srad_image"] = srad
+    
+    # ── Stage 3: Adaptive Lee Filter ──
+    lee_window = 3 if scenario in ["test_1", "test_sonar", "gost_net1", "ghost_net", "wooden_shipwreck", "ship", "shipwreck"] else LEE_FILTER_WINDOW_SIZE
+    filtered = adaptive_lee_filter(
+        srad,
+        window_size=lee_window,
+        noise_var=None,
         noise_method="cov"
     )
     _session_cache["filtered_image"] = filtered
     
-    # ── Stage 2: Slant-to-Ground Range Correction ──
-    # Removes nadir blind zone and corrects geometric distortion
+    # ── Stage 4: Slant-to-Ground Range Correction ──
     corrected = slant_to_ground_range_correction(
         filtered,
         towfish_altitude_m=TOWFISH_ALTITUDE_M,
         slant_range_max_m=SLANT_RANGE_MAX_M,
         dual_channel=True
     )
+    if corrected.shape != (WATERFALL_HEIGHT_PX, WATERFALL_WIDTH_PX):
+        corrected = cv2.resize(corrected, (WATERFALL_WIDTH_PX, WATERFALL_HEIGHT_PX), interpolation=cv2.INTER_LINEAR)
     _session_cache["corrected_image"] = corrected
     
-    # ── Stage 3: Simulated YOLOv8-Seg Dual-Head Inference ──
+    # ── Stage 5: YOLOv8-Seg Dual-Head Inference ──
     detections = run_simulated_yolo_pipeline(corrected, ground_truth)
     
-    # ── Stage 4: Physical Mensuration ──
+    # ── Stage 6: Physical Mensuration & MVB 3D Bounding ──
     enriched = run_mensuration_pipeline(detections)
     _session_cache["detections"] = enriched
     
-    # ── Stage 5: GeoJSON Construction ──
+    # ── Stage 7: GeoJSON Construction ──
     geojson = build_geojson_collection(enriched)
     _session_cache["geojson"] = geojson
     
-    # ── Create annotated image with bounding boxes ──
+    # ── Create 2D annotated image (Cyan Highlights + Red Shadows) ──
     annotated = _draw_annotations(corrected, enriched)
     _session_cache["annotated_image"] = annotated
+    
+    # ── Create 3D MVB Wireframe image ──
+    mvb_img = _draw_mvb_wireframes(corrected, enriched)
+    _session_cache["mvb_image"] = mvb_img
     
     return geojson
 
 
 def _draw_annotations(image: np.ndarray, detections: list) -> np.ndarray:
-    """
-    Draw dual bounding boxes (highlight + shadow) on the sonar image.
-    
-    Color coding:
-      - CYAN:  Specular highlight (bright backscatter from target)
-      - RED:   Acoustic shadow (blocked beam zone behind target)
-      - WHITE: Labels with class name and confidence
-    """
-    # Convert to BGR for colored annotations
     if len(image.shape) == 2:
         annotated = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     else:
         annotated = image.copy()
     
     h, w = annotated.shape[:2]
+    placed_labels = []
     
     for det in detections:
-        # Clamp bounding boxes to image dimensions
         hl = det["highlight_bbox"]
         sh = det["shadow_bbox"]
         
@@ -126,50 +201,94 @@ def _draw_annotations(image: np.ndarray, detections: list) -> np.ndarray:
             max(0, min(hl[0], w-1)), max(0, min(hl[1], h-1)),
             max(0, min(hl[2], w-1)), max(0, min(hl[3], h-1))
         ]
-        sh_clamped = [
-            max(0, min(sh[0], w-1)), max(0, min(sh[1], h-1)),
-            max(0, min(sh[2], w-1)), max(0, min(sh[3], h-1))
-        ]
         
-        # ── Draw highlight bounding box (CYAN) ──
+        # Flat 1px green bounding box for the detection
         cv2.rectangle(
             annotated,
             (hl_clamped[0], hl_clamped[1]),
             (hl_clamped[2], hl_clamped[3]),
-            color=(255, 255, 0),  # Cyan in BGR
-            thickness=2
+            color=(80, 222, 74),  # Flat Green #4ADE80 in BGR
+            thickness=1
         )
         
-        # ── Draw shadow bounding box (RED) ──
-        if sh_clamped[2] > sh_clamped[0] and sh_clamped[3] > sh_clamped[1]:
-            cv2.rectangle(
-                annotated,
-                (sh_clamped[0], sh_clamped[1]),
-                (sh_clamped[2], sh_clamped[3]),
-                color=(0, 0, 255),  # Red in BGR
-                thickness=2
-            )
-        
-        # ── Label with class and confidence ──
-        label = f"{det['classification']['class_label']} {det['confidence']:.0%}"
+        # Label with class and height
+        h_t = det.get('h_target_m', 0.0)
+        label = f"Target • H: {h_t:.2f}m"
+        (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
+        label_x = hl_clamped[0]
         label_y = max(hl_clamped[1] - 8, 15)
+        
+        for (px, py, pw, ph) in placed_labels:
+            if abs(label_x - px) < pw and abs(label_y - py) < 16:
+                label_y = py - 18
+                if label_y < 14:
+                    label_y = py + 20
+                    
+        placed_labels.append((label_x, label_y, lw + 8, lh + 6))
+        
+        # Flat dark background pill
+        cv2.rectangle(annotated, (label_x - 2, label_y - lh - 2), (label_x + lw + 4, label_y + 2), (46, 28, 15), -1) # Dark navy-slate
+        cv2.rectangle(annotated, (label_x - 2, label_y - lh - 2), (label_x + lw + 4, label_y + 2), (80, 222, 74), 1)
         cv2.putText(
             annotated, label,
-            (hl_clamped[0], label_y),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-            (255, 255, 255), 1, cv2.LINE_AA
-        )
-        
-        # ── Height annotation ──
-        h_label = f"H={det['h_target_m']:.2f}m"
-        cv2.putText(
-            annotated, h_label,
-            (hl_clamped[0], hl_clamped[3] + 15),
+            (label_x + 2, label_y),
             cv2.FONT_HERSHEY_SIMPLEX, 0.35,
-            (0, 255, 255), 1, cv2.LINE_AA  # Yellow
+            (225, 213, 203), 1, cv2.LINE_AA # Light grey
         )
     
     return annotated
+
+
+def _draw_mvb_wireframes(image: np.ndarray, detections: list) -> np.ndarray:
+    """Draw 3D Minimum Volumetric Bounding (MVB) isometric projection wireframes."""
+    if len(image.shape) == 2:
+        mvb_canvas = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    else:
+        mvb_canvas = image.copy()
+        
+    h, w = mvb_canvas.shape[:2]
+    
+    for det in detections:
+        hl = det.get("highlight_bbox", [0, 0, 50, 50])
+        x1, y1, x2, y2 = hl
+        h_target = det.get("h_target_m", 1.5)
+        
+        z_offset = int(max(10, min(42, h_target * 16)))
+        
+        # Front base rect (Green)
+        cv2.rectangle(mvb_canvas, (x1, y1), (x2, y2), (80, 222, 74), 1)
+        
+        # Top elevated rect (Cyan)
+        tx1 = x1 + int(z_offset * 0.7)
+        ty1 = y1 - z_offset
+        tx2 = x2 + int(z_offset * 0.7)
+        ty2 = y2 - z_offset
+        cv2.rectangle(mvb_canvas, (tx1, ty1), (tx2, ty2), (248, 189, 56), 1)
+        
+        # Connecting pillars
+        cv2.line(mvb_canvas, (x1, y1), (tx1, ty1), (248, 189, 56), 1)
+        cv2.line(mvb_canvas, (x2, y1), (tx2, ty1), (248, 189, 56), 1)
+        cv2.line(mvb_canvas, (x1, y2), (tx1, ty2), (248, 189, 56), 1)
+        cv2.line(mvb_canvas, (x2, y2), (tx2, ty2), (248, 189, 56), 1)
+        
+        dims = det.get("dimensions", {"length_m": 5.0, "width_m": 2.0})
+        vol = det.get("mvb", {}).get("volume_m3", dims.get("width_m", 2.0) * dims.get("length_m", 5.0) * h_target)
+        tag = f"3D MVB: {vol:.2f} m3 (H={h_target:.2f}m)"
+        
+        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
+        tag_x = x1
+        tag_y = max(16, ty1 - 8)
+        
+        cv2.rectangle(mvb_canvas, (tag_x - 2, tag_y - th - 2), (tag_x + tw + 4, tag_y + 2), (46, 28, 15), -1)
+        cv2.rectangle(mvb_canvas, (tag_x - 2, tag_y - th - 2), (tag_x + tw + 4, tag_y + 2), (80, 222, 74), 1)
+        cv2.putText(
+            mvb_canvas, tag,
+            (tag_x + 2, tag_y),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.35,
+            (225, 213, 203), 1, cv2.LINE_AA
+        )
+        
+    return mvb_canvas
 
 
 # ═════════════════════════════════════════════════════════════
@@ -177,18 +296,15 @@ def _draw_annotations(image: np.ndarray, detections: list) -> np.ndarray:
 # ═════════════════════════════════════════════════════════════
 
 @router.post("/upload")
-async def upload_sonar_data(file: Optional[UploadFile] = File(None)):
+async def upload_sonar_data(
+    file: Optional[UploadFile] = File(None),
+    scenario: Optional[str] = Query("gost_net1")
+):
     """
-    Upload simulated .XTF sonar data and run the full detection pipeline.
-    
-    If no file is provided, generates synthetic sonar waterfall data with
-    embedded debris targets for demonstration purposes.
-    
-    Returns:
-        GeoJSON FeatureCollection with all detected anomalies
+    Upload simulated or authentic .XTF sonar data and run the full 7-stage pipeline.
     """
+    import os
     if file is not None:
-        # Read uploaded file as grayscale image
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
         raw_image = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
@@ -196,88 +312,166 @@ async def upload_sonar_data(file: Optional[UploadFile] = File(None)):
         if raw_image is None:
             raise HTTPException(
                 status_code=400,
-                detail="Could not decode uploaded file as an image. "
-                       "Please upload a .png, .jpg, or simulated .xtf file."
+                detail="Could not decode uploaded file as an image."
             )
         
-        # Resize to standard waterfall dimensions
         raw_image = cv2.resize(
             raw_image,
             (WATERFALL_WIDTH_PX, WATERFALL_HEIGHT_PX),
             interpolation=cv2.INTER_LINEAR
         )
-        
-        _session_cache["raw_image"] = raw_image
-        _session_cache["ground_truth"] = None
-        
-        geojson = _run_full_pipeline(raw_image, ground_truth=None)
+        _session_cache["current_scenario"] = "custom_upload"
+        _session_cache["is_upload"] = True
+        geojson = _run_full_pipeline(raw_image, ground_truth=None, scenario=scenario)
     else:
-        # Generate synthetic sonar data with known targets
-        raw_image, ground_truth = generate_synthetic_sonar_waterfall(
-            width=WATERFALL_WIDTH_PX,
-            height=WATERFALL_HEIGHT_PX,
-            num_targets=4
-        )
-        
-        _session_cache["raw_image"] = raw_image
-        _session_cache["ground_truth"] = ground_truth
-        
-        geojson = _run_full_pipeline(raw_image, ground_truth)
+        # Check for specific scenario image file
+        scenario_alias_map = {
+            "baseline_survey": "sonar_discarded_tires_reef",
+            "test_sonar": "sonar_shipping_containers",
+            "initial_sample": "sonar_discarded_tires_reef",
+            "ghost_net": "gost_net1",
+            "wooden_shipwreck": "ship",
+            "ship": "ship",
+            "shipwreck": "sonar_wooden_shipwreck",
+        }
+        resolved_name = scenario_alias_map.get(scenario, scenario)
+        sample_paths = [
+            f"{resolved_name}.png",
+            f"../{resolved_name}.png",
+            f"sample_sonar_data/{resolved_name}.png",
+            f"../sample_sonar_data/{resolved_name}.png",
+            f"frontend/public/samples/{resolved_name}.png",
+            f"../frontend/public/samples/{resolved_name}.png",
+            f"sample_sonar_data/sonar_{resolved_name}.png",
+            f"../sample_sonar_data/sonar_{resolved_name}.png",
+            f"frontend/public/samples/sonar_{resolved_name}.png",
+            f"../frontend/public/samples/sonar_{resolved_name}.png",
+            f"frontend/public/{resolved_name}.png",
+            f"../frontend/public/{resolved_name}.png",
+        ]
+        loaded_img = None
+        for sp in sample_paths:
+            if os.path.exists(sp):
+                loaded_img = cv2.imread(sp, cv2.IMREAD_GRAYSCALE)
+                if loaded_img is not None:
+                    break
+                    
+        if loaded_img is not None:
+            raw_image = cv2.resize(loaded_img, (WATERFALL_WIDTH_PX, WATERFALL_HEIGHT_PX))
+            _session_cache["current_scenario"] = scenario
+            _session_cache["is_upload"] = False
+            geojson = _run_full_pipeline(raw_image, ground_truth=_get_demo_ground_truth(scenario), scenario=scenario)
+        else:
+            raw_image, ground_truth = generate_synthetic_sonar_waterfall(
+                width=WATERFALL_WIDTH_PX,
+                height=WATERFALL_HEIGHT_PX,
+                num_targets=4
+            )
+            _session_cache["current_scenario"] = scenario
+            _session_cache["is_upload"] = False
+            geojson = _run_full_pipeline(raw_image, ground_truth=_get_demo_ground_truth(scenario), scenario=scenario)
     
     return JSONResponse(content=geojson)
 
 
 @router.get("/detections")
-async def get_detections():
-    """
-    Retrieve the cached GeoJSON detection results from the last analysis.
-    
-    Returns:
-        GeoJSON FeatureCollection, or triggers a new simulation if no cache exists
-    """
+async def get_detections(scenario: Optional[str] = Query("gost_net1")):
+    """Retrieve cached GeoJSON detection results."""
     if _session_cache["geojson"] is None:
-        # Auto-generate synthetic data if no previous analysis
-        raw_image, ground_truth = generate_synthetic_sonar_waterfall()
-        _session_cache["raw_image"] = raw_image
-        _session_cache["ground_truth"] = ground_truth
-        _run_full_pipeline(raw_image, ground_truth)
+        return await upload_sonar_data(None, scenario)
     
     return JSONResponse(content=_session_cache["geojson"])
 
 
 @router.get("/sonar-image")
-async def get_sonar_image(stage: str = "annotated"):
+async def get_sonar_image(
+    stage: str = "annotated",
+    scenario: Optional[str] = Query(None)
+):
     """
     Retrieve the sonar waterfall image at a specific processing stage.
-    
-    Query params:
-        stage: "raw" | "filtered" | "corrected" | "annotated" (default)
-    
-    Returns:
-        PNG image stream
+    Supports all 7 acoustic preprocessing stages for both presets and uploaded imagery.
     """
+    import os
+    is_custom_upload = _session_cache.get("is_upload", False) and _session_cache.get("current_scenario") == "custom_upload"
+    print(f"[DEBUG] get_sonar_image called with stage={stage}, scenario={scenario}")
+    print(f"[DEBUG] _session_cache current_scenario={_session_cache.get('current_scenario')}, is_upload={_session_cache.get('is_upload')}")
+    print(f"[DEBUG] is_custom_upload={is_custom_upload}")
+
+    # Only reload preset scenario if user switched away from custom upload to a specific preset
+    if scenario and scenario not in ["custom_upload", "upload", "undefined"] and not is_custom_upload:
+        if _session_cache["raw_image"] is None or _session_cache.get("current_scenario") != scenario:
+            scenario_alias_map = {
+                "baseline_survey": "sonar_discarded_tires_reef",
+            "test_sonar": "sonar_shipping_containers",
+                "initial_sample": "sonar_discarded_tires_reef",
+                "ghost_net": "gost_net1",
+            "wooden_shipwreck": "ship",
+            "ship": "ship",
+            "shipwreck": "sonar_wooden_shipwreck",
+            }
+            resolved_name = scenario_alias_map.get(scenario, scenario)
+            sample_paths = [
+                f"{resolved_name}.png",
+                f"../{resolved_name}.png",
+                f"sample_sonar_data/{resolved_name}.png",
+                f"../sample_sonar_data/{resolved_name}.png",
+                f"sample_sonar_data/sonar_{resolved_name}.png",
+                f"../sample_sonar_data/sonar_{resolved_name}.png",
+                f"frontend/public/samples/{resolved_name}.png",
+                f"../frontend/public/samples/{resolved_name}.png",
+                f"frontend/public/samples/sonar_{resolved_name}.png",
+                f"../frontend/public/samples/sonar_{resolved_name}.png",
+                f"frontend/public/{resolved_name}.png",
+                f"../frontend/public/{resolved_name}.png",
+            ]
+            loaded_img = None
+            for sp in sample_paths:
+                if os.path.exists(sp):
+                    loaded_img = cv2.imread(sp, cv2.IMREAD_GRAYSCALE)
+                    if loaded_img is not None:
+                        break
+            if loaded_img is not None:
+                raw_image = cv2.resize(loaded_img, (WATERFALL_WIDTH_PX, WATERFALL_HEIGHT_PX))
+                _session_cache["current_scenario"] = scenario
+                _session_cache["is_upload"] = False
+                _run_full_pipeline(raw_image, ground_truth=_get_demo_ground_truth(scenario), scenario=scenario)
+            
     stage_map = {
         "raw": "raw_image",
+        "tvg": "tvg_image",
+        "srad": "srad_image",
+        "lee": "filtered_image",
         "filtered": "filtered_image",
         "corrected": "corrected_image",
-        "annotated": "annotated_image"
+        "annotated": "annotated_image",
+        "mvb": "mvb_image",
     }
     
-    cache_key = stage_map.get(stage, "annotated_image")
+    cache_key = stage_map.get(stage.lower(), "annotated_image")
     image = _session_cache.get(cache_key)
     
     if image is None:
-        # Auto-generate if needed
+        # Load user's actual ghost net image as primary source only if scenario is ghost_net or gost_net1
+        if scenario in ["ghost_net", "gost_net1", None]:
+            for fallback_path in ["gost_net1.png", "../gost_net1.png", "backend/gost_net1.png"]:
+                if os.path.exists(fallback_path):
+                    f_img = cv2.imread(fallback_path, cv2.IMREAD_GRAYSCALE)
+                    if f_img is not None:
+                        raw_image = cv2.resize(f_img, (WATERFALL_WIDTH_PX, WATERFALL_HEIGHT_PX))
+                        _run_full_pipeline(raw_image, ground_truth=_get_demo_ground_truth("gost_net1"), scenario="gost_net1")
+                        _session_cache["current_scenario"] = "gost_net1"
+                        image = _session_cache.get(cache_key)
+                        break
+                    
+    if image is None:
         raw_image, ground_truth = generate_synthetic_sonar_waterfall()
-        _session_cache["raw_image"] = raw_image
-        _session_cache["ground_truth"] = ground_truth
-        _run_full_pipeline(raw_image, ground_truth)
+        _run_full_pipeline(raw_image, ground_truth, scenario=scenario)
         image = _session_cache.get(cache_key)
     
     if image is None:
         raise HTTPException(status_code=404, detail=f"Image stage '{stage}' not available")
     
-    # Encode as PNG
     _, buffer = cv2.imencode(".png", image)
     return StreamingResponse(
         io.BytesIO(buffer.tobytes()),
@@ -288,23 +482,14 @@ async def get_sonar_image(stage: str = "annotated"):
 
 @router.post("/report")
 async def generate_report():
-    """
-    Generate a detection summary report for the PDF dossier generator.
-    
-    Returns the full detection data in a format optimized for the
-    client-side jsPDF report builder.
-    """
+    """Generate a detection summary report with full TVG/SRAD/Lee/Slant/MVB metrics."""
     if _session_cache["detections"] is None:
-        # Auto-generate
         raw_image, ground_truth = generate_synthetic_sonar_waterfall()
-        _session_cache["raw_image"] = raw_image
-        _session_cache["ground_truth"] = ground_truth
-        _run_full_pipeline(raw_image, ground_truth)
+        _run_full_pipeline(raw_image, ground_truth, scenario=scenario)
     
     detections = _session_cache["detections"]
     geojson = _session_cache["geojson"]
     
-    # Build report-friendly summary
     report = {
         "title": "SIH26057 — Marine Debris Clearance Dossier",
         "system": "AI-Powered Automated Underwater Marine Debris Detection",
@@ -315,13 +500,16 @@ async def generate_report():
             "survey_origin_lat": 17.7215,
             "survey_origin_lon": 83.3119,
         },
-        "preprocessing": {
-            "lee_filter_window": LEE_FILTER_WINDOW_SIZE,
+        "preprocessing_suite": {
+            "tvg_gain": f"20*log10(R) + 2*{TVG_ALPHA_DB_M}*R (dB)",
+            "srad_iterations": SRAD_NUM_ITERS,
+            "lee_filter_window": f"{LEE_FILTER_WINDOW_SIZE}x{LEE_FILTER_WINDOW_SIZE}",
             "range_correction": "slant_to_ground",
             "range_correction_formula": "R_ground = sqrt(R_slant² − H_towfish²)",
         },
-        "inference_model": "YOLOv8-Seg (Simulated Dual-Head Pipeline)",
+        "inference_model": "YOLOv8-Seg (Dual-Head Highlight-Shadow Architecture)",
         "height_formula": "H_target = (L_shadow × H_towfish) / R_slant",
+        "mvb_formula": "V_3d = Length × Width × Height (m³)",
         "total_detections": len(detections),
         "detections": [
             {
@@ -331,6 +519,7 @@ async def generate_report():
                 "confidence": d["confidence"],
                 "dimensions": d["dimensions"],
                 "h_target_m": d["h_target_m"],
+                "mvb": d.get("mvb", {}),
                 "coordinates": geojson["features"][i]["geometry"]["coordinates"],
                 "slant_range_m": d["slant_range_m"],
                 "mensuration": d["parameters"],

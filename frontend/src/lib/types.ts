@@ -11,12 +11,38 @@ export interface Dimensions {
   height_m: number;
 }
 
+/** 3D Minimum Volumetric Bounding (MVB) calculations */
+export interface MVB3DData {
+  dimensions: {
+    length_m: number;
+    width_m: number;
+    height_m: number;
+  };
+  volume_m3: number;
+  footprint_area_m2: number;
+  surface_area_m2: number;
+  aspect_ratio: number;
+  orientation_deg: number;
+  vertices_3d?: number[][];
+  bbox_2d_px?: {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    width_px: number;
+    length_px: number;
+  };
+  mensuration_type?: string;
+}
+
 /** Mensuration provenance — documents how H_target was calculated */
 export interface MensurationParams {
   L_shadow_px: number;
   L_shadow_m: number;
   H_towfish_m: number;
   R_slant_m: number;
+  volume_m3?: number;
+  footprint_area_m2?: number;
 }
 
 export interface Mensuration {
@@ -41,6 +67,7 @@ export interface DetectionProperties {
   // Physical measurements
   dimensions: Dimensions;
   h_target_m: number;
+  mvb?: MVB3DData;
 
   // Acoustic parameters
   slant_range_m: number;
@@ -50,9 +77,12 @@ export interface DetectionProperties {
   // Mensuration provenance
   mensuration: Mensuration;
 
-  // Pixel-space bounding boxes (for overlay rendering)
+  // Pixel-space bounding boxes and YOLOv8 segmentation polygon outlines
   highlight_bbox: [number, number, number, number];
   shadow_bbox: [number, number, number, number];
+  highlight_polygon?: [number, number][];
+  shadow_polygon?: [number, number][];
+  segmentation_area_px?: number;
 
   // Display properties
   marker_color: string;
@@ -73,15 +103,18 @@ export interface DetectionFeature {
 /** Survey metadata from the backend */
 export interface SurveyMetadata {
   system: string;
-  sonar: string;
-  model: string;
-  survey_origin: {
+  scenario?: string;
+  sonar?: string;
+  model?: string;
+  survey_origin?: {
     latitude: number;
     longitude: number;
     heading_deg: number;
-  };
-  towfish_altitude_m: number;
-  generated_at: string;
+  } | [number, number];
+  towfish_altitude_m?: number;
+  frequency_khz?: number;
+  slant_range_max_m?: number;
+  generated_at?: string;
   total_detections: number;
 }
 
@@ -100,6 +133,7 @@ export interface ReportDetection {
   confidence: number;
   dimensions: Dimensions;
   h_target_m: number;
+  mvb?: MVB3DData;
   coordinates: [number, number];
   slant_range_m: number;
   mensuration: MensurationParams;
@@ -115,17 +149,41 @@ export interface ReportData {
     survey_origin_lat: number;
     survey_origin_lon: number;
   };
-  preprocessing: {
-    lee_filter_window: number;
+  preprocessing_suite?: {
+    tvg_gain?: string;
+    srad_iterations?: number;
+    lee_filter_window?: string | number;
+    range_correction?: string;
+    range_correction_formula?: string;
+  };
+  preprocessing?: {
+    lee_filter_window: number | string;
     range_correction: string;
     range_correction_formula: string;
   };
   inference_model: string;
   height_formula: string;
+  mvb_formula?: string;
   total_detections: number;
   detections: ReportDetection[];
   geojson: DetectionCollection;
 }
 
+/** Pipeline stages */
+export type PipelineStage =
+  | "raw"
+  | "tvg"
+  | "srad"
+  | "lee"
+  | "filtered"
+  | "corrected"
+  | "annotated"
+  | "mvb";
+
 /** Analysis pipeline status */
-export type PipelineStatus = "idle" | "uploading" | "processing" | "complete" | "error";
+export type PipelineStatus =
+  | "idle"
+  | "uploading"
+  | "processing"
+  | "complete"
+  | "error";
