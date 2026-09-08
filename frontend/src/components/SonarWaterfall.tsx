@@ -149,8 +149,8 @@ export default function SonarWaterfall({
     if (showOverlays && detections.length > 0) {
       if (pipelineStage === "mvb") {
         drawMVB3DWireframes(ctx, detections, scaleX, scaleY);
-      } else if (pipelineStage === "annotated" || pipelineStage === "corrected") {
-        // YOLOv8 Pixel-Level Segmentation Polygon Outlines!
+      } else if (pipelineStage === "annotated") {
+        // YOLOv8 Pixel-Level Segmentation Polygon Outlines — annotated stage only
         drawYOLOSegmentationPolygons(ctx, detections, scaleX, scaleY, img.width, img.height, scenarioId);
       }
     }
@@ -213,7 +213,7 @@ export default function SonarWaterfall({
     { id: "srad", label: "3. SRAD", description: "Anisotropic speckle diffusion" },
     { id: "lee", label: "4. Lee Filter", description: "Adaptive statistical denoising" },
     { id: "corrected", label: "5. Slant Range", description: "Geometric nadir flattening" },
-    { id: "annotated", label: "6. YOLOv8-Seg", description: "Pixel segmentation outlines" },
+    { id: "annotated", label: "6. YOLOv8", description: "Acoustic highlight & target bounding boxes" },
     { id: "mvb", label: "7. MVB 3D Box", description: "3D Volumetric Bounding Box" },
   ];
 
@@ -255,7 +255,7 @@ export default function SonarWaterfall({
               : "bg-transparent text-[var(--text-muted)] border-[var(--border-subtle)]"
           }`}
         >
-          {showOverlays ? "✨ Masks: ON" : "Masks: OFF"}
+          {showOverlays ? "Targets: ON" : "Targets: OFF"}
         </button>
       </div>
 
@@ -279,16 +279,8 @@ export default function SonarWaterfall({
         )}
       </div>
 
-      {/* Footer Stats & Preprocessing Telemetry */}
-      <div className="flex items-center justify-between px-4 py-1.5 bg-[var(--bg-tertiary)] border-t border-[var(--border-subtle)] text-[11px] font-mono text-[var(--text-muted)]">
-        <span className="text-[var(--text-primary)] font-medium">
-          MODE: {pipelineStage.toUpperCase()} (YOLOv8-Seg Dual-Head)
-        </span>
-        <span className="hidden sm:inline">TVG: 20log₁₀R+2αR</span>
-        <span className="hidden sm:inline">SRAD: 5 iters</span>
-        <span className="hidden md:inline">Lee: 7x7 LMMSE</span>
-        <span>H_alt: 8.0m</span>
-      </div>
+      {/* Footer bar with no text */}
+      <div className="h-6 bg-[var(--bg-tertiary)] border-t border-[var(--border-subtle)]" />
     </div>
   );
 }

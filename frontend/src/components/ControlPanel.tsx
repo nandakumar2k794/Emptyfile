@@ -24,6 +24,8 @@ interface ControlPanelProps {
   onUpload: (file?: File | null) => void;
   onAnalyze: () => void;
   onGenerateDossier: () => void;
+  onDownloadJSON: () => void;
+  onDownloadCSV: () => void;
   onOpenPhysicsModal: () => void;
   onOpenMVBModal: () => void;
   isLiveScanning: boolean;
@@ -38,6 +40,8 @@ export default function ControlPanel({
   onUpload,
   onAnalyze,
   onGenerateDossier,
+  onDownloadJSON,
+  onDownloadCSV,
   onOpenPhysicsModal,
   onOpenMVBModal,
   isLiveScanning,
@@ -117,14 +121,14 @@ export default function ControlPanel({
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-sm font-bold tracking-wide text-[var(--text-primary)] font-mono">
-              SIH26057 • HYDROGRAPHIC SONAR AI
+              SONARSENSE • HYDROGRAPHIC SONAR AI
             </h1>
             <span className="text-[10px] px-2 py-0.5 rounded-full border-[var(--border-subtle)] text-[var(--text-secondary)] font-mono font-bold border">
               600 kHz SSS
             </span>
           </div>
           <p className="text-[11px] text-[var(--text-muted)] font-mono">
-            Pixel-Level YOLOv8-Seg • Adaptive Lee • SRAD • Slant Correction • 3D MVB
+            YOLOv8 Object Detection • Adaptive Lee • SRAD • Slant Correction • 3D MVB
           </p>
         </div>
       </div>
@@ -243,6 +247,34 @@ export default function ControlPanel({
             <polyline points="14 2 14 8 20 8" />
           </svg>
           PDF Dossier
+        </button>
+
+        {/* Download JSON Button */}
+        <button
+          className="btn-secondary !text-xs cursor-pointer flex items-center gap-1"
+          onClick={onDownloadJSON}
+          disabled={isProcessing || detectionCount === 0}
+          style={{ opacity: detectionCount === 0 ? 0.4 : 1 }}
+          title="Export anomaly report as JSON"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+          </svg>
+          JSON
+        </button>
+
+        {/* Download CSV Button */}
+        <button
+          className="btn-secondary !text-xs cursor-pointer flex items-center gap-1"
+          onClick={onDownloadCSV}
+          disabled={isProcessing || detectionCount === 0}
+          style={{ opacity: detectionCount === 0 ? 0.4 : 1 }}
+          title="Export anomaly report as CSV"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+          </svg>
+          CSV
         </button>
       </div>
 

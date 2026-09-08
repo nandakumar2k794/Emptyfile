@@ -126,6 +126,66 @@ export default function DashboardPage() {
     }
   }, [geojson]);
 
+  // ── JSON Report Generation ──
+  const handleDownloadJSON = useCallback(async () => {
+    try {
+      const reportData = await generateReport(geojson);
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(reportData, null, 2));
+      const downloadAnchorNode = document.createElement("a");
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", `SIH26057_Anomaly_Report_${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+    } catch (error) {
+      console.error("JSON generation failed:", error);
+    }
+  }, [geojson]);
+
+  // ── CSV Report Generation ──
+  const handleDownloadCSV = useCallback(async () => {
+    try {
+      const reportData = await generateReport(geojson);
+      if (!reportData.detections || reportData.detections.length === 0) return;
+      
+      const headers = [
+        "id", "class", "threat", "confidence",
+        "latitude", "longitude", 
+        "length_m", "width_m", "height_m", "volume_m3", "slant_range_m"
+      ];
+      
+      const csvRows = [headers.join(",")];
+      
+      for (const det of reportData.detections) {
+        const row = [
+          det.id,
+          det.class,
+          det.threat,
+          det.confidence,
+          det.coordinates[1], // lat
+          det.coordinates[0], // lon
+          det.dimensions.length_m,
+          det.dimensions.width_m,
+          det.dimensions.height_m,
+          det.mvb?.volume_m3 || "",
+          det.slant_range_m
+        ];
+        csvRows.push(row.join(","));
+      }
+      
+      const csvString = csvRows.join("\n");
+      const dataStr = "data:text/csv;charset=utf-8," + encodeURIComponent(csvString);
+      const downloadAnchorNode = document.createElement("a");
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", `SIH26057_Anomaly_Report_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+    } catch (error) {
+      console.error("CSV generation failed:", error);
+    }
+  }, [geojson]);
+
   // ── Detection Selection Handler ──
   const handleDetectionSelect = useCallback(
     (detection: DetectionFeature) => {
@@ -162,6 +222,8 @@ export default function DashboardPage() {
         onUpload={handleUpload}
         onAnalyze={handleAnalyze}
         onGenerateDossier={handleGenerateDossier}
+        onDownloadJSON={handleDownloadJSON}
+        onDownloadCSV={handleDownloadCSV}
         onOpenPhysicsModal={() => setIsPhysicsModalOpen(true)}
         onOpenMVBModal={() => setIsMVBModalOpen(true)}
         isLiveScanning={isLiveScanning}

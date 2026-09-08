@@ -359,28 +359,30 @@ export default function TacticalMap({
 
         {/* View Switcher Controls */}
         <div className="flex items-center gap-2">
-          <div className="flex p-0.5 rounded-none bg-[var(--bg-tertiary)] border-[var(--border-subtle)] border border-[var(--border-subtle)] text-[11px] font-mono">
-            <button
-              onClick={() => setViewMode("radar")}
-              className={`px-2.5 py-1 rounded-none transition-all cursor-pointer ${
-                viewMode === "radar"
-                  ? "bg-[var(--accent-primary)] text-white font-medium border border-[var(--accent-primary)] shadow-none"
-                  : "text-[var(--text-secondary)] hover:text-white"
-              }`}
-            >
-              📡 Radar GIS
-            </button>
-            <button
-              onClick={() => setViewMode("mapbox")}
-              className={`px-2.5 py-1 rounded-none transition-all cursor-pointer ${
-                viewMode === "mapbox"
-                  ? "bg-[var(--accent-primary)] text-white font-medium border border-[var(--accent-primary)] shadow-none"
-                  : "text-[var(--text-secondary)] hover:text-white"
-              }`}
-            >
-              🛰️ 3D Globe
-            </button>
-          </div>
+          {hasToken && (
+            <div className="flex p-0.5 rounded-none bg-[var(--bg-tertiary)] border-[var(--border-subtle)] border text-[11px] font-mono">
+              <button
+                onClick={() => setViewMode("radar")}
+                className={`px-2.5 py-1 rounded-none transition-all cursor-pointer ${
+                  viewMode === "radar"
+                    ? "bg-[var(--accent-primary)] text-white font-medium border border-[var(--accent-primary)] shadow-none"
+                    : "text-[var(--text-secondary)] hover:text-white"
+                }`}
+              >
+                📡 Radar GIS
+              </button>
+              <button
+                onClick={() => setViewMode("mapbox")}
+                className={`px-2.5 py-1 rounded-none transition-all cursor-pointer ${
+                  viewMode === "mapbox"
+                    ? "bg-[var(--accent-primary)] text-white font-medium border border-[var(--accent-primary)] shadow-none"
+                    : "text-[var(--text-secondary)] hover:text-white"
+                }`}
+              >
+                🛰️ 3D Globe
+              </button>
+            </div>
+          )}
 
           {geojson && (
             <span className="text-[11px] px-2.5 py-0.5 rounded-none bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-subtle)] font-mono font-bold">
@@ -471,11 +473,8 @@ export default function TacticalMap({
         )}
       </div>
 
-      {/* Footer Info */}
-      <div className="flex items-center justify-between px-4 py-1.5 bg-[var(--bg-tertiary)] border-t border-[var(--border-subtle)] text-[11px] font-mono text-[var(--text-muted)]">
-        <span>DATUM: WGS84 • GRID: 75m SWATH TRANSECT</span>
-        <span>RESOLUTION: 0.146 m/px • SUBSEA ACOUSTIC BEAM</span>
-      </div>
+      {/* Footer bar with no text */}
+      <div className="h-6 bg-[var(--bg-tertiary)] border-t border-[var(--border-subtle)]" />
     </div>
   );
 }

@@ -36,6 +36,8 @@ from app.preprocessing.range_correction import slant_to_ground_range_correction
 from app.inference.detector import run_simulated_yolo_pipeline
 from app.inference.mensuration import run_mensuration_pipeline
 from app.inference.geojson_builder import build_geojson_collection, _to_native
+# Real YOLOv8 model — only imported/used for user-uploaded images
+from app.inference.yolov8_detector import run_real_yolo_pipeline
 
 router = APIRouter(prefix="/api/v1", tags=["Sonar Processing"])
 
@@ -61,20 +63,20 @@ def _get_demo_ground_truth(scenario: str):
         return [{
             "target_id": 0,
             "class_id": 0,
-            "confidence": 0.98,
-            "highlight_bbox": [860, 210, 910, 320],
-            "shadow_bbox": [910, 215, 965, 315],
+            "confidence": 0.842,
+            "highlight_bbox": [755, 65, 965, 360],
+            "shadow_bbox": [710, 160, 765, 320],
             "shadow_length_px": 55,
-            "center_px": [885, 265],
+            "center_px": [860, 212],
             "slant_range_m": 58.5,
-            "highlight_polygon": [[860, 210], [910, 225], [910, 310], [860, 320]],
-            "shadow_polygon": [[910, 215], [965, 215], [965, 315], [910, 310]],
+            "highlight_polygon": [[875, 65], [965, 200], [920, 360], [755, 260]],
+            "shadow_polygon": [[755, 160], [800, 160], [800, 320], [710, 320]],
         }]
     elif scenario in ["baseline_survey", "initial_sample", "sonar_discarded_tires_reef"]:
         return [{
             "target_id": 0,
             "class_id": 11,
-            "confidence": 0.92,
+            "confidence": 0.794,
             "highlight_bbox": [220, 280, 254, 314],
             "shadow_bbox": [178, 280, 220, 314],
             "shadow_length_px": 42,
@@ -87,7 +89,7 @@ def _get_demo_ground_truth(scenario: str):
         return [{
             "target_id": 0,
             "class_id": 1,
-            "confidence": 0.96,
+            "confidence": 0.912,
             "highlight_bbox": [221, 118, 278, 159],
             "shadow_bbox": [170, 118, 221, 159],
             "shadow_length_px": 51,
@@ -100,14 +102,14 @@ def _get_demo_ground_truth(scenario: str):
         return [{
             "target_id": 0,
             "class_id": 8,
-            "confidence": 0.98,
-            "highlight_bbox": [670, 50, 790, 335],
-            "shadow_bbox": [790, 50, 875, 335],
-            "shadow_length_px": 85,
-            "center_px": [730, 192],
-            "slant_range_m": 31.8,
-            "highlight_polygon": [[670, 50], [790, 70], [785, 335], [670, 320]],
-            "shadow_polygon": [[790, 50], [875, 50], [875, 335], [790, 335]],
+            "confidence": 0.885,
+            "highlight_bbox": [675, 150, 855, 430],
+            "shadow_bbox": [785, 180, 865, 420],
+            "shadow_length_px": 80,
+            "center_px": [765, 290],
+            "slant_range_m": 33.5,
+            "highlight_polygon": [[685, 160], [745, 155], [845, 395], [775, 430]],
+            "shadow_polygon": [[745, 155], [865, 200], [865, 420], [845, 395]],
         }]
     return None
 
@@ -115,7 +117,8 @@ def _get_demo_ground_truth(scenario: str):
 def _run_full_pipeline(
     raw_image: np.ndarray,
     ground_truth: list = None,
-    scenario: str = None
+    scenario: str = None,
+    use_real_model: bool = False
 ) -> dict:
     """
     Execute the complete 7-stage acoustic preprocessing + inference pipeline.
@@ -162,8 +165,14 @@ def _run_full_pipeline(
         corrected = cv2.resize(corrected, (WATERFALL_WIDTH_PX, WATERFALL_HEIGHT_PX), interpolation=cv2.INTER_LINEAR)
     _session_cache["corrected_image"] = corrected
     
-    # ── Stage 5: YOLOv8-Seg Dual-Head Inference ──
-    detections = run_simulated_yolo_pipeline(corrected, ground_truth)
+    # ── Stage 5: YOLOv8 Inference ──
+    # use_real_model=True ONLY when a user uploads a file.
+    # All preset scenarios continue using the simulated pipeline.
+    if use_real_model:
+        print("[SIH26057] User upload detected — running real YOLOv8 (best.pt) inference.")
+        detections = run_real_yolo_pipeline(corrected)
+    else:
+        detections = run_simulated_yolo_pipeline(corrected, ground_truth)
     
     # ── Stage 6: Physical Mensuration & MVB 3D Bounding ──
     enriched = run_mensuration_pipeline(detections)
@@ -322,7 +331,13 @@ async def upload_sonar_data(
         )
         _session_cache["current_scenario"] = "custom_upload"
         _session_cache["is_upload"] = True
-        geojson = _run_full_pipeline(raw_image, ground_truth=None, scenario=scenario)
+        # ── Real YOLOv8 model is ONLY triggered here for user uploads ──
+        geojson = _run_full_pipeline(
+            raw_image,
+            ground_truth=None,
+            scenario=scenario,
+            use_real_model=True
+        )
     else:
         # Check for specific scenario image file
         scenario_alias_map = {
@@ -377,7 +392,7 @@ async def upload_sonar_data(
 @router.get("/detections")
 async def get_detections(scenario: Optional[str] = Query("gost_net1")):
     """Retrieve cached GeoJSON detection results."""
-    if _session_cache["geojson"] is None:
+    if _session_cache["geojson"] is None or _session_cache.get("current_scenario") != scenario:
         return await upload_sonar_data(None, scenario)
     
     return JSONResponse(content=_session_cache["geojson"])

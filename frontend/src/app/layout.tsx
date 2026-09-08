@@ -2,10 +2,11 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SIH26057 — AI Marine Debris Detection | Side-Scan Sonar Dashboard",
+  title: "SonarSense — AI Marine Debris Detection | Side-Scan Sonar Dashboard",
   description:
-    "AI-Powered Automated Underwater Marine Debris Detection System using Side-Scan Sonar Imagery. Real-time tactical dashboard with YOLOv8-Seg inference, acoustic shadow analysis, and GeoJSON mapping.",
+    "SonarSense AI-Powered Automated Underwater Marine Debris Detection System using Side-Scan Sonar Imagery. Real-time tactical dashboard with YOLOv8 object detection, acoustic shadow analysis, and GeoJSON mapping.",
   keywords: [
+    "SonarSense",
     "marine debris detection",
     "side-scan sonar",
     "YOLOv8",

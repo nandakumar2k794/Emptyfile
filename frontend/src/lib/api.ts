@@ -80,7 +80,7 @@ export function createMockScenario(
       {
         label: "ghost_fishing_net",
         threat: "HIGH",
-        conf: 0.98,
+        conf: 0.842,
         w: 4.8,
         l: 8.5,
         h: 2.1,
@@ -88,13 +88,13 @@ export function createMockScenario(
         shadowLen: 7.5,
         color: "#dc2626",
         coords: [83.3142, 17.7238],
-        hlBbox: [860, 210, 910, 320],
-        shBbox: [910, 215, 965, 315],
+        hlBbox: [755, 65, 965, 360],
+        shBbox: [710, 160, 765, 320],
         hlPoly: [
-          [870, 219], [905, 231], [903, 294], [876, 310], [871, 308], [867, 255]
+          [875, 65], [965, 200], [920, 360], [755, 260]
         ],
         shPoly: [
-          [905, 223], [952, 223], [960, 308], [903, 308]
+          [755, 160], [800, 160], [800, 320], [710, 320]
         ],
         orient: 24.0,
       },
@@ -103,7 +103,7 @@ export function createMockScenario(
       {
         label: "discarded_tires",
         threat: "LOW",
-        conf: 0.92,
+        conf: 0.794,
         w: 1.2,
         l: 1.2,
         h: 0.45,
@@ -126,7 +126,7 @@ export function createMockScenario(
       {
         label: "shipping_container",
         threat: "HIGH",
-        conf: 0.96,
+        conf: 0.912,
         w: 6.0,
         l: 8.3,
         h: 1.39,
@@ -145,7 +145,7 @@ export function createMockScenario(
       {
         label: "ghost_fishing_net",
         threat: "HIGH",
-        conf: 0.96,
+        conf: 0.865,
         w: 4.8,
         l: 8.5,
         h: 2.1,
@@ -153,10 +153,10 @@ export function createMockScenario(
         shadowLen: 7.5,
         color: "#dc2626",
         coords: [83.316, 17.726],
-        hlBbox: [860, 210, 910, 320],
-        shBbox: [910, 215, 965, 315],
-        hlPoly: [[860, 210], [910, 225], [910, 310], [860, 320]],
-        shPoly: [[910, 215], [965, 215], [965, 315], [910, 310]],
+        hlBbox: [755, 65, 965, 360],
+        shBbox: [710, 160, 765, 320],
+        hlPoly: [[875, 65], [965, 200], [920, 360], [755, 260]],
+        shPoly: [[755, 160], [800, 160], [800, 320], [710, 320]],
         orient: 24.0,
       }
     ],
@@ -164,7 +164,7 @@ export function createMockScenario(
       {
         label: "wooden_shipwreck",
         threat: "HIGH",
-        conf: 0.98,
+        conf: 0.885,
         w: 17.5,
         l: 41.6,
         h: 3.12,
@@ -172,10 +172,10 @@ export function createMockScenario(
         shadowLen: 12.4,
         color: "#d97706",
         coords: [83.3148, 17.7242],
-        hlBbox: [670, 50, 790, 335],
-        shBbox: [790, 50, 875, 335],
-        hlPoly: [[670, 50], [790, 70], [785, 335], [670, 320]],
-        shPoly: [[790, 50], [875, 50], [875, 335], [790, 335]],
+        hlBbox: [675, 150, 855, 430],
+        shBbox: [785, 180, 865, 420],
+        hlPoly: [[685, 160], [745, 155], [845, 395], [775, 430]],
+        shPoly: [[745, 155], [865, 200], [865, 420], [845, 395]],
         orient: 8.0,
       }
     ],
@@ -310,7 +310,7 @@ export async function getDetections(
   scenarioId: string = "gost_net1"
 ): Promise<DetectionCollection> {
   try {
-    const response = await fetch(`${API_BASE}/api/v1/detections`);
+    const response = await fetch(`${API_BASE}/api/v1/detections?scenario=${encodeURIComponent(scenarioId)}`);
     if (response.ok) {
       return await response.json();
     }

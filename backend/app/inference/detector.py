@@ -356,41 +356,41 @@ def classify_target(
     w_px = highlight["width_px"]
     h_px = highlight["height_px"]
 
-    # 0: Ghost net — sprawling irregular mesh, large footprint, low solidity (< 0.75) or large irregular area
+    # 0: Ghost net — sprawling irregular mesh, large footprint, low solidity (<0.75) or large irregular area
     if (area > 350 and solidity < 0.75) or (area > 1200) or (w_px > 85 and h_px > 40 and solidity < 0.78):
         class_id = 0  # ghost_net
-        conf = 0.97
+        conf = 0.84
     # 11: Discarded tires / reef — compact annular / round doughnut or tire cluster with balanced aspect ratio
     elif 0.70 <= aspect <= 1.40 and solidity >= 0.65:
         class_id = 11  # discarded_tires_reef
-        conf = 0.95
+        conf = 0.79
     # 1: Shipping container — large rectilinear solid rectangular block with high solidity
     elif 1.8 <= aspect <= 3.8 and area >= 300 and solidity >= 0.75:
         class_id = 1  # shipping_container
-        conf = 0.95
+        conf = 0.91
     # 5: Chemical drum — cylindrical barrel, aspect 1.2..1.8, area 100..320
     elif 1.2 <= aspect <= 1.8 and area <= 350:
         class_id = 5  # chemical_drum
-        conf = 0.92
+        conf = 0.82
     # 7: Subsea pipeline — very elongated linear scour line
     elif aspect > 3.8:
         class_id = 7  # pipeline_trench_scour
-        conf = 0.93
+        conf = 0.87
     # 6: Mooring anchor chain — tall/narrow along-track line
     elif aspect < 0.45:
         class_id = 6  # mooring_anchor_chain
-        conf = 0.91
+        conf = 0.81
     # 3: Moored sea mine — compact circular return with prominent shadow
     elif shadow_length_px > 30 and area < 250:
         class_id = 3  # moored_sea_mine
-        conf = 0.94
+        conf = 0.85
     # 2: Unexploded ordnance (UXO) — compact cylindrical return
     elif area <= 280:
         class_id = 2  # unexploded_ordnance_uxo
-        conf = 0.89
+        conf = 0.78
     else:
         class_id = 0  # ghost_net default for large marine debris accumulations
-        conf = 0.90
+        conf = 0.83
 
     return class_id, conf
 
